@@ -1,0 +1,42 @@
+{
+  "name": "cfx-uploader",
+  "version": "1.0.0",
+  "description": "Upload CFX Portal assets from GitHub releases",
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "src",
+    "README.md",
+    "docs/github-actions-workflow.md",
+    "docs/nuxt-library-plan.md"
+  ],
+  "scripts": {
+    "orchestrate": "node src/cli/browser-cli.js",
+    "orchestrate-http": "node src/cli/http-cli.js",
+    "register-passkey": "node src/cli/register-passkey-cli.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "cfx",
+    "fivem",
+    "redm",
+    "uploader",
+    "github-release"
+  ],
+  "author": "Jump On Studios",
+  "license": "ISC",
+  "homepage": "https://github.com/Jump-On-Studios/cfx-uploader#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Jump-On-Studios/cfx-uploader.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Jump-On-Studios/cfx-uploader/issues"
+  },
+  "type": "commonjs",
+  "dependencies": {
+    "adm-zip": "^0.5.17",
+    "dotenv": "^17.4.0",
+    "puppeteer": "^24.40.0"
+  }
+}
