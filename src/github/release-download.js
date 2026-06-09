@@ -57,6 +57,7 @@ function getDownloadInfoFromRelease(release) {
         fileName: zipAsset.name,
         version: release.tag_name || null,
         source: 'asset',
+        body: release.body || null,
       };
     }
   }
@@ -70,6 +71,7 @@ function getDownloadInfoFromRelease(release) {
     fileName: `${release.tag_name || 'latest'}.zip`,
     version: release.tag_name || null,
     source: 'zipball',
+    body: release.body || null,
   };
 }
 

@@ -49,6 +49,7 @@ async function upload(options = {}) {
     passkeySource: options.passkeySource || (options.passkeyJson ? 'passkeyJson' : 'passkey'),
     fallbackConfig: {},
     headless: options.headless !== false,
+    changelog: options.changelog ?? null,
     releasesDir: path.join(workDir, 'releases'),
     onLog,
   });

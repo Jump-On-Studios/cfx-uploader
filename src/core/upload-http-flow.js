@@ -29,6 +29,7 @@ async function runHttpUploadFlow(options) {
     passkeySource,
     fallbackConfig = {},
     headless = true,
+    changelog = null,
     releasesDir = path.join(projectRoot, 'releases'),
     tempExtractDir = path.join(releasesDir, '.tmp-extract'),
     onLog = (message) => console.log(message),
@@ -116,6 +117,7 @@ async function runHttpUploadFlow(options) {
       assetDetails,
       metadata,
       zipPath: createdZipPath,
+      changelog: changelog ?? releaseInfo.body,
     });
 
     uploadSucceeded = true;

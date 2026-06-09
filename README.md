@@ -65,6 +65,12 @@ Fields:
 - `portalName`: exact CFX Portal asset name
 - `foldersToZip`: folders from the release source ZIP to include in the final upload ZIP
 
+## Changelog
+
+The `changelog` field is written to the CFX Portal version description on upload.
+
+When omitted, it defaults to the GitHub release body. If no release body is present, it falls back to `'Automated upload from cfx-uploader.'`.
+
 The final ZIP filename is based on `foldersToZip[0]`.
 
 ## Library Usage
@@ -90,6 +96,7 @@ const uploader = createUploader({
 const result = await uploader.upload({
   repository: payload.repository.full_name,
   releaseTag: payload.release?.tag_name,
+  changelog: payload.release?.body,
 });
 ```
 
@@ -101,6 +108,7 @@ import { upload } from 'cfx-uploader';
 const result = await upload({
   repository: 'Jump-On-Studios/RedM-jo_chest',
   releaseTag: 'v1.1.2',
+  changelog: 'Bug fixes and improvements.',
   githubToken: process.env.GITHUB_TOKEN,
   passkey: {
     credentialId: process.env.CFX_UPLOADER_CREDENTIAL_ID,
