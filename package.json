@@ -1,6 +1,6 @@
 {
   "name": "cfx-uploader",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Upload CFX Portal assets from GitHub releases",
   "main": "index.js",
   "files": [
