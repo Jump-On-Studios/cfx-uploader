@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * Register a CFX forum passkey with a Chromium virtual authenticator.
  * Writes the resulting WebAuthn credential to ./passkey-credential.json.

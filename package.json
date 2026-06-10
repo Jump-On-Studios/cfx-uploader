@@ -3,6 +3,11 @@
   "version": "1.0.4",
   "description": "Upload CFX Portal assets from GitHub releases",
   "main": "index.js",
+  "bin": {
+    "cfx-uploader-register-passkey": "src/cli/register-passkey-cli.js",
+    "cfx-uploader-http": "src/cli/http-cli.js",
+    "cfx-uploader-browser": "src/cli/browser-cli.js"
+  },
   "files": [
     "index.js",
     "src",
