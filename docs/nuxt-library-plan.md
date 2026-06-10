@@ -56,6 +56,7 @@ const uploader = createUploader({
 await uploader.upload({
   repository,
   releaseTag: payload.release?.tag_name,
+  releaseCandidate: Boolean(payload.release?.prerelease),
 });
 ```
 
@@ -67,6 +68,7 @@ import { upload } from 'cfx-uploader';
 await upload({
   repository,
   releaseTag,
+  releaseCandidate,
   githubToken,
   passkey,
 });
@@ -81,6 +83,7 @@ await upload({
 - The reusable core must accept explicit options instead of relying on CLI args and `process.env`:
   - `repository`
   - `releaseTag`
+  - `releaseCandidate`
   - `githubToken`
   - `passkey`
   - `headless`
@@ -104,10 +107,11 @@ The library upload flow should match the current HTTP mode:
 6. Rebuild the filtered ZIP from `foldersToZip`.
 7. Read `fxmanifest.lua`.
 8. Compare release tag and manifest version, ignoring only a leading `v`.
-9. Authenticate to CFX with the provided passkey.
-10. Upload the ZIP through `portal-api.cfx.re`.
-11. Poll until the CFX asset returns to `ACTIVE`.
-12. Delete downloaded archives, temporary extraction folders, and generated upload ZIPs after every run, including failed runs.
+9. Resolve CFX release type: GitHub pre-release maps to CFX Release Candidate / Beta unless explicitly overridden.
+10. Authenticate to CFX with the provided passkey.
+11. Upload the ZIP through `portal-api.cfx.re`.
+12. Poll until the CFX asset returns to `ACTIVE`.
+13. Delete downloaded archives, temporary extraction folders, and generated upload ZIPs after every run, including failed runs.
 
 ## Nuxt Environment Variables
 

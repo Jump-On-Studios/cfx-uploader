@@ -5,7 +5,7 @@ const { resolveGithubRepository } = require('../config/cfx-uploader-config');
 const { resolvePasskeyCredential } = require('../auth/passkey-credential');
 const { resolveReleaseTag } = require('../github/release-download');
 const { runHttpUploadFlow } = require('../core/upload-http-flow');
-const { parseHeadlessFromArgs } = require('../utils/args');
+const { parseHeadlessFromArgs, parseReleaseCandidateFromArgs } = require('../utils/args');
 const { loadProjectEnv } = require('../utils/runtime-env');
 
 async function runHttpCli(args = process.argv.slice(2)) {
@@ -14,6 +14,7 @@ async function runHttpCli(args = process.argv.slice(2)) {
 
   const fallbackConfig = { ...mockConfig };
   const repository = resolveGithubRepository(fallbackConfig);
+  const releaseCandidate = parseReleaseCandidateFromArgs(args);
   const passkey = await resolvePasskeyCredential({ projectRoot });
 
   return runHttpUploadFlow({
@@ -25,6 +26,7 @@ async function runHttpCli(args = process.argv.slice(2)) {
     passkeySource: passkey.source,
     fallbackConfig,
     headless: parseHeadlessFromArgs(args),
+    releaseCandidate,
   });
 }
 

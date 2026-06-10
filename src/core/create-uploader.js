@@ -31,6 +31,13 @@ function validateUploadOptions(options) {
   if (!options.githubToken || typeof options.githubToken !== 'string') {
     throw new Error('Upload option "githubToken" is required.');
   }
+
+  if (
+    options.releaseCandidate !== undefined &&
+    typeof options.releaseCandidate !== 'boolean'
+  ) {
+    throw new Error('Upload option "releaseCandidate" must be a boolean when provided.');
+  }
 }
 
 async function upload(options = {}) {
@@ -49,6 +56,7 @@ async function upload(options = {}) {
     passkeySource: options.passkeySource || (options.passkeyJson ? 'passkeyJson' : 'passkey'),
     fallbackConfig: {},
     headless: options.headless !== false,
+    releaseCandidate: options.releaseCandidate,
     changelog: options.changelog ?? null,
     releasesDir: path.join(workDir, 'releases'),
     onLog,

@@ -28,6 +28,7 @@ async function runBrowserUploadFlow(options) {
     passkeySource,
     fallbackConfig = {},
     headless = true,
+    releaseCandidate,
     releasesDir = path.join(projectRoot, 'releases'),
     tempExtractDir = path.join(releasesDir, '.tmp-extract'),
   } = options;
@@ -50,7 +51,12 @@ async function runBrowserUploadFlow(options) {
       throw new Error(`No downloadable release found for ${repository}${releaseTag ? ` tag ${releaseTag}` : ''}.`);
     }
 
+    const resolvedReleaseCandidate = typeof releaseCandidate === 'boolean'
+      ? releaseCandidate
+      : Boolean(releaseInfo.prerelease);
     console.log(`Resolved release: ${releaseInfo.version || 'unknown'} (${releaseInfo.source})`);
+    console.log(`GitHub prerelease: ${Boolean(releaseInfo.prerelease)}`);
+    console.log(`CFX release candidate: ${resolvedReleaseCandidate}`);
     console.log('Step 2/5: Downloading release ZIP...');
 
     downloadedZipPath = await downloadReleaseZip({
@@ -103,6 +109,7 @@ async function runBrowserUploadFlow(options) {
       page: authContext.page,
       portalName: config.portalName,
       zipPath: createdZipPath,
+      releaseCandidate: resolvedReleaseCandidate,
     });
 
     await new Promise((resolve) => setTimeout(resolve, 8000));

@@ -43,7 +43,7 @@ function buildGithubHeaders(githubToken, accept = 'application/vnd.github+json')
  * Extract preferred downloadable ZIP info from a GitHub release payload.
  * It prefers ZIP assets and falls back to GitHub zipball when needed.
  * @param {Record<string, any>} release
- * @returns {{ url: string, fileName: string, version: string | null, source: 'asset' | 'zipball' } | null}
+ * @returns {{ url: string, fileName: string, version: string | null, source: 'asset' | 'zipball', body: string | null, prerelease: boolean } | null}
  */
 function getDownloadInfoFromRelease(release) {
   if (Array.isArray(release.assets) && release.assets.length > 0) {
@@ -58,6 +58,7 @@ function getDownloadInfoFromRelease(release) {
         version: release.tag_name || null,
         source: 'asset',
         body: release.body || null,
+        prerelease: Boolean(release.prerelease),
       };
     }
   }
@@ -72,6 +73,7 @@ function getDownloadInfoFromRelease(release) {
     version: release.tag_name || null,
     source: 'zipball',
     body: release.body || null,
+    prerelease: Boolean(release.prerelease),
   };
 }
 
@@ -110,7 +112,7 @@ function assertReleaseVersionMatchesManifest(releaseVersion, manifestVersion) {
 /**
  * Resolve latest release download information from GitHub.
  * @param {{ repository: string, githubToken?: string }} options
- * @returns {Promise<{ url: string, fileName: string, version: string | null, source: 'asset' | 'zipball' } | null>}
+ * @returns {Promise<{ url: string, fileName: string, version: string | null, source: 'asset' | 'zipball', body: string | null, prerelease: boolean } | null>}
  */
 async function getLatestReleaseDownloadInfo(options) {
   const { repository, githubToken } = options;
@@ -133,7 +135,7 @@ async function getLatestReleaseDownloadInfo(options) {
 /**
  * Resolve release download information for a specific GitHub tag.
  * @param {{ repository: string, releaseTag: string, githubToken?: string }} options
- * @returns {Promise<{ url: string, fileName: string, version: string | null, source: 'asset' | 'zipball' } | null>}
+ * @returns {Promise<{ url: string, fileName: string, version: string | null, source: 'asset' | 'zipball', body: string | null, prerelease: boolean } | null>}
  */
 async function getReleaseDownloadInfoByTag(options) {
   const { repository, releaseTag, githubToken } = options;

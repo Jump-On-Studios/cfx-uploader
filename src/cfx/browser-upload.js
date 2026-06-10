@@ -302,6 +302,82 @@ async function clickUploadNewVersionButton(page) {
 }
 
 /**
+ * Select CFX version type in the new-version modal.
+ * @param {{ page: import('puppeteer').Page, releaseCandidate: boolean }} options
+ * @returns {Promise<void>}
+ */
+async function selectReleaseTypeInModal(options) {
+  const { page, releaseCandidate } = options;
+  const expectedLabel = releaseCandidate ? 'release candidate / beta' : 'full release';
+
+  const found = await retryOnNavigationContext(() =>
+    page.waitForFunction(
+      (label) => {
+        const modal = document.querySelector('#overlay-outlet');
+        if (!modal) return false;
+
+        const normalize = (value) => (value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+        const isVisible = (element) => {
+          const rect = element.getBoundingClientRect();
+          const style = getComputedStyle(element);
+          return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+        };
+
+        const candidates = modal.querySelectorAll('button,[role="button"],[role="radio"],[role="tab"],label');
+        for (const candidate of candidates) {
+          if (isVisible(candidate) && normalize(candidate.textContent) === label) {
+            return true;
+          }
+        }
+
+        return false;
+      },
+      { timeout: 30000 },
+      expectedLabel
+    )
+  )
+    .then(() => true)
+    .catch(() => false);
+
+  if (!found) {
+    const modalText = await page
+      .evaluate(() => {
+        const modal = document.querySelector('#overlay-outlet');
+        return modal ? (modal.innerText || modal.textContent || '').replace(/\s+/g, ' ').trim() : '';
+      })
+      .catch(() => '');
+    throw new Error(`CFX release type option "${expectedLabel}" not found in upload modal. Modal text: ${modalText}`);
+  }
+
+  const clicked = await retryOnNavigationContext(() =>
+    page.evaluate((label) => {
+      const modal = document.querySelector('#overlay-outlet');
+      if (!modal) return false;
+
+      const normalize = (value) => (value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      const isVisible = (element) => {
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+      };
+
+      const candidates = Array.from(
+        modal.querySelectorAll('button,[role="button"],[role="radio"],[role="tab"],label')
+      );
+
+      const target = candidates.find((candidate) => isVisible(candidate) && normalize(candidate.textContent) === label);
+      if (!target) return false;
+      target.click();
+      return true;
+    }, expectedLabel)
+  );
+
+  if (!clicked) {
+    throw new Error(`Failed to select CFX release type "${expectedLabel}".`);
+  }
+}
+
+/**
  * Upload local ZIP path into the file input in the new-version modal.
  * @param {{ page: import('puppeteer').Page, zipPath: string }} options
  * @returns {Promise<void>}
@@ -526,15 +602,22 @@ async function waitForUploadSettled(options) {
 
 /**
  * Full upload flow once user is authenticated and on the Created Assets page.
- * @param {{ page: import('puppeteer').Page, portalName: string, zipPath: string, releaseNotes?: string }} options
+ * @param {{ page: import('puppeteer').Page, portalName: string, zipPath: string, releaseNotes?: string, releaseCandidate?: boolean }} options
  * @returns {Promise<void>}
  */
 async function uploadZipToCfxAsset(options) {
-  const { page, portalName, zipPath, releaseNotes = DEFAULT_RELEASE_NOTES } = options;
+  const {
+    page,
+    portalName,
+    zipPath,
+    releaseNotes = DEFAULT_RELEASE_NOTES,
+    releaseCandidate = false,
+  } = options;
 
   await filterByAssetName({ page, assetName: portalName });
   await selectAssetByName({ page, assetName: portalName });
   await clickUploadNewVersionButton(page);
+  await selectReleaseTypeInModal({ page, releaseCandidate });
   await uploadZipInModal({ page, zipPath });
   await clickModalNextButton(page);
   await fillReleaseNotes({ page, releaseNotes });

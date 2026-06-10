@@ -43,7 +43,7 @@ function splitIntoChunks(buffer, targetChunkCount = DEFAULT_CHUNK_COUNT) {
   };
 }
 
-async function createReUpload(session, assetId, metadata, chunkPlan, changelog = DEFAULT_CHANGELOG) {
+async function createReUpload(session, assetId, metadata, chunkPlan, changelog = DEFAULT_CHANGELOG, releaseCandidate = false) {
   const payload = await cfxJson(session, `/v1/assets/${assetId}/re-upload`, {
     method: 'POST',
     headers: {
@@ -55,7 +55,7 @@ async function createReUpload(session, assetId, metadata, chunkPlan, changelog =
       chunk_size: chunkPlan.chunkSize,
       total_size: metadata.totalSize,
       original_file_name: metadata.fileName,
-      release_candidate: false,
+      release_candidate: Boolean(releaseCandidate),
       version: metadata.version,
       changelog,
     }),
@@ -142,6 +142,7 @@ async function uploadZipVersionHttp(session, options) {
     metadata,
     zipPath,
     changelog = DEFAULT_CHANGELOG,
+    releaseCandidate = false,
   } = options;
 
   const preparedMetadata = {
@@ -155,8 +156,8 @@ async function uploadZipVersionHttp(session, options) {
   const zipBuffer = await fs.readFile(zipPath);
   const chunkPlan = splitIntoChunks(zipBuffer);
 
-  console.log(`Creating HTTP upload: version=${preparedMetadata.version}, chunks=${chunkPlan.chunkCount}, chunk_size=${chunkPlan.chunkSize}`);
-  const createPayload = await createReUpload(session, asset.id, preparedMetadata, chunkPlan, changelog);
+  console.log(`Creating HTTP upload: version=${preparedMetadata.version}, chunks=${chunkPlan.chunkCount}, chunk_size=${chunkPlan.chunkSize}, release_candidate=${Boolean(releaseCandidate)}`);
+  const createPayload = await createReUpload(session, asset.id, preparedMetadata, chunkPlan, changelog, releaseCandidate);
   const versionId = createPayload.version_id;
 
   for (const { chunkId, chunk } of chunkPlan.chunks) {
@@ -174,6 +175,7 @@ async function uploadZipVersionHttp(session, options) {
     assetId: asset.id,
     versionId,
     version: preparedMetadata.version,
+    releaseCandidate: Boolean(releaseCandidate),
     finalAsset,
   };
 }

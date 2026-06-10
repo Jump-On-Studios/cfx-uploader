@@ -51,6 +51,8 @@ If these secrets are missing in GitHub Actions, the upload fails before CFX auth
 
 Release tags can be written with or without a leading `v`. If `1.0.0` is requested and only `v1.0.0` exists, the uploader tries the alternate form automatically, and vice versa. After downloading the release, the resolved tag is compared to `fxmanifest.lua` `version`; `v1.0.0` and `1.0.0` are considered equal.
 
+GitHub pre-releases are uploaded to CFX as `Release Candidate / Beta` versions. Normal GitHub releases are uploaded as CFX full releases. The CLI can override this with `--release-candidate` or `--full-release` when needed.
+
 ## Example Workflow
 
 ```yaml
@@ -126,3 +128,10 @@ npm run orchestrate-http -- --release-tag=v1.1.2
 ```
 
 If the release tag and `fxmanifest.lua` version do not match, the uploader fails before CFX authentication or upload.
+
+To force the CFX release type locally:
+
+```bash
+npm run orchestrate-http -- --release-tag=v1.1.2 --release-candidate
+npm run orchestrate-http -- --release-tag=v1.1.2 --full-release
+```

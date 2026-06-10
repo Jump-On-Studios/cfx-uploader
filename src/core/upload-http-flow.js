@@ -30,6 +30,7 @@ async function runHttpUploadFlow(options) {
     passkeySource,
     fallbackConfig = {},
     headless = true,
+    releaseCandidate,
     changelog = null,
     releasesDir = path.join(projectRoot, 'releases'),
     tempExtractDir = path.join(releasesDir, '.tmp-extract'),
@@ -57,6 +58,11 @@ async function runHttpUploadFlow(options) {
     if (!releaseInfo) {
       throw new Error(`No downloadable release found for ${repository}${releaseTag ? ` tag ${releaseTag}` : ''}.`);
     }
+    const resolvedReleaseCandidate = typeof releaseCandidate === 'boolean'
+      ? releaseCandidate
+      : Boolean(releaseInfo.prerelease);
+    log(`GitHub prerelease: ${Boolean(releaseInfo.prerelease)}`, { githubPrerelease: Boolean(releaseInfo.prerelease) });
+    log(`CFX release candidate: ${resolvedReleaseCandidate}`, { releaseCandidate: resolvedReleaseCandidate });
 
     log('\nStep 2/6: Downloading release ZIP');
     downloadedZipPath = await downloadReleaseZip({
@@ -120,6 +126,7 @@ async function runHttpUploadFlow(options) {
       metadata,
       zipPath: createdZipPath,
       changelog: changelog ?? releaseInfo.body,
+      releaseCandidate: resolvedReleaseCandidate,
     });
 
     log(`HTTP upload complete: asset=${uploadResult.assetId}, version_id=${uploadResult.versionId}, version=${uploadResult.version}`);
@@ -130,6 +137,7 @@ async function runHttpUploadFlow(options) {
       repository,
       releaseTag,
       resolvedReleaseTag: releaseInfo.version,
+      releaseCandidate: resolvedReleaseCandidate,
       portalName: config.portalName,
       version: uploadResult.version,
       assetId: uploadResult.assetId,

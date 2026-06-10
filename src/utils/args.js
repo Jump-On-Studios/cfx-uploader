@@ -23,6 +23,26 @@ function parseHeadlessFromArgs(args = process.argv.slice(2)) {
   return true;
 }
 
+function parseReleaseCandidateFromArgs(args = process.argv.slice(2)) {
+  const releaseCandidate = args.includes('--release-candidate');
+  const fullRelease = args.includes('--full-release');
+
+  if (releaseCandidate && fullRelease) {
+    throw new Error('Invalid release type flags: use either --release-candidate or --full-release, not both.');
+  }
+
+  if (releaseCandidate) {
+    return true;
+  }
+
+  if (fullRelease) {
+    return false;
+  }
+
+  return undefined;
+}
+
 module.exports = {
   parseHeadlessFromArgs,
+  parseReleaseCandidateFromArgs,
 };

@@ -98,6 +98,7 @@ const uploader = createUploader({
 const result = await uploader.upload({
   repository: payload.repository.full_name,
   releaseTag: payload.release?.tag_name,
+  releaseCandidate: Boolean(payload.release?.prerelease),
   changelog: payload.release?.body,
 });
 ```
@@ -110,6 +111,7 @@ import { upload } from 'cfx-uploader';
 const result = await upload({
   repository: 'Jump-On-Studios/RedM-jo_chest',
   releaseTag: 'v1.1.2',
+  releaseCandidate: false,
   changelog: 'Bug fixes and improvements.',
   githubToken: process.env.GITHUB_TOKEN,
   passkey: {
@@ -132,12 +134,36 @@ The library returns a structured result on success:
   repository,
   releaseTag,
   resolvedReleaseTag,
+  releaseCandidate,
   portalName,
   version,
   assetId,
   versionId
 }
 ```
+
+## Release Candidate / Beta
+
+CFX Uploader maps GitHub pre-releases to CFX `Release Candidate / Beta` uploads.
+
+Default behavior:
+
+- GitHub normal release -> CFX full release
+- GitHub pre-release -> CFX release candidate / beta
+
+Library usage can override the GitHub release type:
+
+```js
+await upload({
+  repository,
+  releaseTag,
+  githubToken,
+  passkey,
+  releaseCandidate: true,
+});
+```
+
+When `releaseCandidate` is omitted, CFX Uploader uses the resolved GitHub release metadata. This automatic behavior works best when a specific release tag is provided, as GitHub `/releases/latest` does not return pre-releases.
 
 ## Upload Errors
 
@@ -242,6 +268,15 @@ Show the browser during authentication:
 npm run orchestrate-http -- --show-browser
 ```
 
+Force the CFX release type:
+
+```bash
+npm run orchestrate-http -- --release-candidate
+npm run orchestrate-http -- --full-release
+```
+
+If neither flag is provided, the CLI uses the resolved GitHub release metadata.
+
 ### Browser Mode
 
 Browser mode drives the full CFX Portal UI with Puppeteer. It is useful for debugging portal changes.
@@ -254,6 +289,13 @@ Show the browser:
 
 ```bash
 npm run orchestrate -- --show-browser
+```
+
+Browser mode supports the same release type flags:
+
+```bash
+npm run orchestrate -- --release-candidate
+npm run orchestrate -- --full-release
 ```
 
 ## Release Version Rules
