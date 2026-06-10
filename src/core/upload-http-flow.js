@@ -10,6 +10,7 @@ const {
   unzipDownloadedRelease,
   listTopLevelFolders,
   createFilteredZip,
+  cleanupFile,
   cleanupTempExtractDir,
 } = require('../zip/zip-workflow');
 const { readCfxUploaderConfig } = require('../config/cfx-uploader-config');
@@ -36,9 +37,9 @@ async function runHttpUploadFlow(options) {
   } = options;
   const log = (message, meta) => onLog(message, meta);
 
+  let downloadedZipPath = null;
   let createdZipPath = null;
   let browser = null;
-  let uploadSucceeded = false;
 
   try {
     log('=== CFX Uploader HTTP Orchestrator ===');
@@ -58,7 +59,7 @@ async function runHttpUploadFlow(options) {
     }
 
     log('\nStep 2/6: Downloading release ZIP');
-    const downloadedZipPath = await downloadReleaseZip({
+    downloadedZipPath = await downloadReleaseZip({
       releaseInfo,
       releasesDir,
       githubToken,
@@ -83,6 +84,7 @@ async function runHttpUploadFlow(options) {
     });
     if (path.resolve(downloadedZipPath).toLowerCase() !== path.resolve(createdZipPath).toLowerCase()) {
       await fs.rm(downloadedZipPath, { force: true });
+      downloadedZipPath = null;
     }
     log(`Top-level folders in release: ${topLevelFolders.join(', ') || '(none)'}`);
     log(`Filtered ZIP ready: ${createdZipPath}`, { zipPath: createdZipPath });
@@ -120,11 +122,7 @@ async function runHttpUploadFlow(options) {
       changelog: changelog ?? releaseInfo.body,
     });
 
-    uploadSucceeded = true;
     log(`HTTP upload complete: asset=${uploadResult.assetId}, version_id=${uploadResult.versionId}, version=${uploadResult.version}`);
-
-    await fs.rm(createdZipPath, { force: true });
-    log(`Deleted local ZIP after completed upload: ${createdZipPath}`);
 
     return {
       success: true,
@@ -140,13 +138,11 @@ async function runHttpUploadFlow(options) {
     };
   } finally {
     await cleanupTempExtractDir(tempExtractDir);
+    await cleanupFile(downloadedZipPath, log);
+    await cleanupFile(createdZipPath, log);
 
     if (browser) {
       await browser.close();
-    }
-
-    if (createdZipPath && !uploadSucceeded) {
-      log(`Keeping local ZIP for debugging: ${createdZipPath}`, { zipPath: createdZipPath });
     }
   }
 }

@@ -147,6 +147,33 @@ async function prepareFilteredZipFromDownloadedRelease(options) {
 }
 
 /**
+ * Remove a generated/downloaded file without masking the original workflow result.
+ * @param {string | null | undefined} filePath
+ * @param {(message: string, meta?: object) => void} [log]
+ * @returns {Promise<void>}
+ */
+async function cleanupFile(filePath, log = () => {}) {
+  if (!filePath) {
+    return;
+  }
+
+  try {
+    await fs.stat(filePath);
+    await fs.rm(filePath, { force: true });
+    log(`Deleted local file: ${filePath}`, { filePath });
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      return;
+    }
+
+    log(`Warning: failed to delete local file ${filePath}: ${error.message}`, {
+      level: 'warn',
+      filePath,
+    });
+  }
+}
+
+/**
  * Remove temporary extraction folder.
  * @param {string} tempExtractDir
  * @returns {Promise<void>}
@@ -160,5 +187,6 @@ module.exports = {
   listTopLevelFolders,
   createFilteredZip,
   prepareFilteredZipFromDownloadedRelease,
+  cleanupFile,
   cleanupTempExtractDir,
 };

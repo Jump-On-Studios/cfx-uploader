@@ -107,7 +107,7 @@ The library upload flow should match the current HTTP mode:
 9. Authenticate to CFX with the provided passkey.
 10. Upload the ZIP through `portal-api.cfx.re`.
 11. Poll until the CFX asset returns to `ACTIVE`.
-12. Delete the local ZIP only after completed upload.
+12. Delete downloaded archives, temporary extraction folders, and generated upload ZIPs after every run, including failed runs.
 
 ## Nuxt Environment Variables
 

@@ -10,6 +10,8 @@ It can be used in three ways:
 
 The HTTP flow still uses Puppeteer for CFX passkey authentication, then uploads through `portal-api.cfx.re`.
 
+Downloaded release archives, temporary extraction folders, and generated upload ZIPs are deleted after every run, including failed runs.
+
 ## Requirements
 
 - Node.js `18+`
@@ -136,6 +138,48 @@ The library returns a structured result on success:
   versionId
 }
 ```
+
+## Upload Errors
+
+`upload()` throws on failure. In an integration such as a Nuxt webhook, catch the error and forward `error.message` to private logs or a private Discord channel. Do not expose these messages in customer-facing notifications.
+
+The HTTP upload flow covers release download, ZIP preparation, CFX authentication, asset lookup, and the final CFX API upload. Common errors include:
+
+| Area | Error message pattern | Meaning |
+|---|---|---|
+| Library options | `Upload options are required.` | `upload()` was called without an options object. |
+| Library options | `Upload option "repository" is required.` | The GitHub repository was not provided. |
+| Library options | `Upload option "githubToken" is required.` | The GitHub token was not provided. |
+| Passkey | `Missing CFX passkey. Provide passkey or passkeyJson.` | No CFX passkey was provided to the library. |
+| Passkey | `Invalid passkey: ...` | One passkey field is missing or invalid. |
+| GitHub release | `No downloadable release found for ...` | The release/tag could not be found or has no downloadable archive. |
+| GitHub release | `GitHub API error...` / `Download failed...` | GitHub rejected the release lookup or ZIP download. |
+| Project config | `Missing cfx_uploader.json at repository root...` | The downloaded release does not contain the required config file. |
+| Project config | `Invalid cfx_uploader.json: portalName...` | `portalName` is missing or invalid. |
+| Project config | `Invalid cfx_uploader.json: foldersToZip...` | `foldersToZip` is missing or invalid. |
+| ZIP workflow | `Folder "..." not found in unzipped release...` | A folder listed in `foldersToZip` does not exist in the release archive. |
+| ZIP workflow | `Path "..." is not a directory.` | A configured upload path exists but is not a directory. |
+| ZIP metadata | `ZIP metadata missing: no fxmanifest.lua found...` | The final ZIP does not contain an `fxmanifest.lua`. |
+| ZIP metadata | `ZIP metadata missing: no version detected...` | The manifest does not expose a readable version. |
+| Version check | release/manifest version mismatch | The GitHub release tag and `fxmanifest.lua` version differ, ignoring only a leading `v`. |
+| CFX auth | `Portal failed to load (timeout), last URL: ...` | Browser passkey auth or portal redirect did not reach the created-assets page. |
+| CFX auth | Puppeteer/WebAuthn errors | Chromium failed to launch, inject the virtual authenticator, or complete navigation. |
+| CFX session | `No CFX cookies found after browser authentication` | Browser auth completed without usable CFX API cookies. |
+| CFX session | `CFX HTTP auth failed (401/403): ...` | `portal-api.cfx.re` rejected the authenticated session. |
+| CFX API | `GET/POST https://portal-api.cfx.re/... failed (...): ...` | A CFX API endpoint returned a non-2xx response. |
+| CFX API | `Invalid JSON response from ...` | CFX returned non-JSON where JSON was expected. |
+| Asset lookup | `Unexpected CFX assets list shape: ...` | The CFX assets list response format changed. |
+| Asset lookup | `CFX asset not found by exact name "...". First assets: ...` | `portalName` does not exactly match an owned CFX asset. |
+| Asset lookup | `CFX asset "..." is missing an id...` | The matching CFX asset response is malformed. |
+| Upload validation | `Version already exists on asset "...": ...` | The version from `fxmanifest.lua` already exists on the CFX asset. |
+| Upload create | `CFX re-upload rejected: ...` | CFX rejected the version creation payload. |
+| Upload create | `CFX re-upload response missing version_id: ...` | CFX did not return the expected version id. |
+| Chunk upload | `Chunk upload failed for chunk_id=... (...): ...` | One ZIP chunk failed to upload. |
+| Complete upload | `POST .../complete-upload failed (...): ...` | CFX rejected upload finalization. |
+| Polling | `CFX poll timeout waiting for ACTIVE: ...` | The asset/version did not become `active` before timeout. |
+| Local files | `ENOENT`, permission, or filesystem errors | A downloaded or generated ZIP file could not be read or written. |
+
+Local ZIPs and downloaded archives are not kept after failures. To inspect an upload ZIP, reproduce the run locally with a debugger or inspect the GitHub release source.
 
 For VPS/Nuxt usage, store passkey fields as separate environment variables:
 

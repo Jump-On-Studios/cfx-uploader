@@ -10,6 +10,7 @@ const {
   unzipDownloadedRelease,
   listTopLevelFolders,
   createFilteredZip,
+  cleanupFile,
   cleanupTempExtractDir,
 } = require('../zip/zip-workflow');
 const { readCfxUploaderConfig } = require('../config/cfx-uploader-config');
@@ -32,8 +33,8 @@ async function runBrowserUploadFlow(options) {
   } = options;
 
   let browser = null;
+  let downloadedZipPath = null;
   let createdZipPath = null;
-  let uploadClickSucceeded = false;
 
   try {
     console.log('Step 1/5: Resolving GitHub release...');
@@ -52,7 +53,7 @@ async function runBrowserUploadFlow(options) {
     console.log(`Resolved release: ${releaseInfo.version || 'unknown'} (${releaseInfo.source})`);
     console.log('Step 2/5: Downloading release ZIP...');
 
-    const downloadedZipPath = await downloadReleaseZip({
+    downloadedZipPath = await downloadReleaseZip({
       releaseInfo,
       releasesDir,
       githubToken,
@@ -77,6 +78,7 @@ async function runBrowserUploadFlow(options) {
     });
     if (path.resolve(downloadedZipPath).toLowerCase() !== path.resolve(createdZipPath).toLowerCase()) {
       await fs.rm(downloadedZipPath, { force: true });
+      downloadedZipPath = null;
     }
     console.log(`Top-level folders in release: ${topLevelFolders.join(', ') || '(none)'}`);
     console.log(`Prepared ZIP path: ${createdZipPath}`);
@@ -103,22 +105,16 @@ async function runBrowserUploadFlow(options) {
       zipPath: createdZipPath,
     });
 
-    uploadClickSucceeded = true;
     await new Promise((resolve) => setTimeout(resolve, 8000));
-    await fs.rm(createdZipPath, { force: true });
-    console.log(`Deleted local ZIP after upload click: ${createdZipPath}`);
-    createdZipPath = null;
 
     console.log('Orchestration completed successfully.');
   } finally {
     await cleanupTempExtractDir(tempExtractDir);
+    await cleanupFile(downloadedZipPath, console.log);
+    await cleanupFile(createdZipPath, console.log);
 
     if (browser) {
       await browser.close();
-    }
-
-    if (!uploadClickSucceeded && createdZipPath) {
-      console.log(`Upload not completed. Keeping local ZIP for debugging: ${createdZipPath}`);
     }
   }
 }
