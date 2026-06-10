@@ -6,6 +6,8 @@ const DEFAULT_CHUNK_COUNT = 4;
 const DEFAULT_CHANGELOG = 'Automated upload from cfx-uploader.';
 const DEFAULT_POLL_TIMEOUT_MS = 120000;
 const DEFAULT_POLL_INTERVAL_MS = 3000;
+const MAX_VERSIONS_ERROR_CODE = 'MAX_VERSIONS_REACHED';
+const MAX_VERSIONS_MESSAGE = 'CFX asset has reached the maximum of 5 versions. Enable deleteOldestVersionWhenCapped to delete the oldest version automatically.';
 
 function findVersionByValue(assetDetails, version) {
   return (assetDetails.versions || []).find((candidate) => candidate && candidate.version === version);
@@ -44,7 +46,8 @@ function splitIntoChunks(buffer, targetChunkCount = DEFAULT_CHUNK_COUNT) {
 }
 
 async function createReUpload(session, assetId, metadata, chunkPlan, changelog = DEFAULT_CHANGELOG, releaseCandidate = false) {
-  const payload = await cfxJson(session, `/v1/assets/${assetId}/re-upload`, {
+  const path = `/v1/assets/${assetId}/re-upload`;
+  const response = await cfxFetch(session, path, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
@@ -60,6 +63,28 @@ async function createReUpload(session, assetId, metadata, chunkPlan, changelog =
       changelog,
     }),
   });
+  const body = await readResponseBody(response);
+
+  if (!response.ok) {
+    const error = new Error(`POST ${session.apiOrigin}${path} failed (${response.status}): ${body}`);
+    error.status = response.status;
+    error.body = body;
+
+    try {
+      error.payload = body ? JSON.parse(body) : {};
+    } catch {
+      error.payload = null;
+    }
+
+    throw error;
+  }
+
+  let payload;
+  try {
+    payload = body ? JSON.parse(body) : {};
+  } catch {
+    throw new Error(`Invalid JSON response from ${session.apiOrigin}${path}: ${body}`);
+  }
 
   if (payload.errors) {
     throw new Error(`CFX re-upload rejected: ${JSON.stringify(payload.errors)}`);
@@ -70,6 +95,124 @@ async function createReUpload(session, assetId, metadata, chunkPlan, changelog =
   }
 
   return payload;
+}
+
+function isMaxVersionsReachedError(error) {
+  return (
+    error &&
+    error.status === 409 &&
+    error.payload &&
+    error.payload.error_code === MAX_VERSIONS_ERROR_CODE
+  );
+}
+
+function findOldestVersion(assetDetails) {
+  const versions = (assetDetails.versions || []).filter((version) => version && version.id);
+
+  if (versions.length === 0) {
+    return null;
+  }
+
+  return versions.reduce((oldest, candidate) => {
+    const oldestTime = Date.parse(oldest.created_at || '');
+    const candidateTime = Date.parse(candidate.created_at || '');
+
+    if (Number.isNaN(candidateTime)) {
+      return oldest;
+    }
+
+    if (Number.isNaN(oldestTime) || candidateTime < oldestTime) {
+      return candidate;
+    }
+
+    return oldest;
+  }, versions[0]);
+}
+
+async function deleteAssetVersion(session, assetId, version) {
+  const response = await cfxFetch(session, `/v1/assets/${assetId}/versions/${version.id}`, {
+    method: 'DELETE',
+  });
+  const body = await readResponseBody(response);
+
+  if (!response.ok) {
+    throw new Error(`DELETE ${session.apiOrigin}/v1/assets/${assetId}/versions/${version.id} failed (${response.status}): ${body}`);
+  }
+
+  return body ? JSON.parse(body) : {};
+}
+
+async function waitForDeletedVersion(session, assetId, deletedVersionId, options = {}) {
+  const timeoutMs = options.timeoutMs || 30000;
+  const intervalMs = options.intervalMs || 1500;
+  const startedAt = Date.now();
+  let lastAssetDetails = null;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    lastAssetDetails = await getAssetDetails(session, assetId);
+    const versions = lastAssetDetails.versions || [];
+    const deletedStillExists = versions.some((version) => version && version.id === deletedVersionId);
+
+    if (!deletedStillExists || versions.length < 5) {
+      return lastAssetDetails;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+
+  throw new Error(`Timed out waiting for CFX version deletion: ${JSON.stringify(summarizeAssetState(lastAssetDetails || {}, deletedVersionId))}`);
+}
+
+async function deleteOldestVersionForCap(session, assetId) {
+  const cappedAssetDetails = await getAssetDetails(session, assetId);
+  const oldestVersion = findOldestVersion(cappedAssetDetails);
+
+  if (!oldestVersion) {
+    throw new Error(`CFX asset ${assetId} is capped but no deletable version was found.`);
+  }
+
+  console.log(`Deleting oldest CFX version before retry: id=${oldestVersion.id}, version=${oldestVersion.version}, created_at=${oldestVersion.created_at}`);
+  await deleteAssetVersion(session, assetId, oldestVersion);
+  await waitForDeletedVersion(session, assetId, oldestVersion.id);
+
+  return {
+    id: oldestVersion.id,
+    version: oldestVersion.version,
+    created_at: oldestVersion.created_at,
+  };
+}
+
+async function createReUploadWithCapHandling(session, options) {
+  const {
+    assetId,
+    metadata,
+    chunkPlan,
+    changelog,
+    releaseCandidate,
+    deleteOldestVersionWhenCapped,
+  } = options;
+
+  try {
+    return {
+      createPayload: await createReUpload(session, assetId, metadata, chunkPlan, changelog, releaseCandidate),
+      deletedOldestVersion: null,
+    };
+  } catch (error) {
+    if (!isMaxVersionsReachedError(error)) {
+      throw error;
+    }
+
+    if (!deleteOldestVersionWhenCapped) {
+      throw new Error(MAX_VERSIONS_MESSAGE);
+    }
+
+    const deletedOldestVersion = await deleteOldestVersionForCap(session, assetId);
+
+    return {
+      createPayload: await createReUpload(session, assetId, metadata, chunkPlan, changelog, releaseCandidate),
+      deletedOldestVersion,
+    };
+  }
 }
 
 async function uploadChunk(session, assetId, versionId, chunkId, chunk) {
@@ -143,6 +286,7 @@ async function uploadZipVersionHttp(session, options) {
     zipPath,
     changelog = DEFAULT_CHANGELOG,
     releaseCandidate = false,
+    deleteOldestVersionWhenCapped = false,
   } = options;
 
   const preparedMetadata = {
@@ -157,7 +301,14 @@ async function uploadZipVersionHttp(session, options) {
   const chunkPlan = splitIntoChunks(zipBuffer);
 
   console.log(`Creating HTTP upload: version=${preparedMetadata.version}, chunks=${chunkPlan.chunkCount}, chunk_size=${chunkPlan.chunkSize}, release_candidate=${Boolean(releaseCandidate)}`);
-  const createPayload = await createReUpload(session, asset.id, preparedMetadata, chunkPlan, changelog, releaseCandidate);
+  const { createPayload, deletedOldestVersion } = await createReUploadWithCapHandling(session, {
+    assetId: asset.id,
+    metadata: preparedMetadata,
+    chunkPlan,
+    changelog,
+    releaseCandidate,
+    deleteOldestVersionWhenCapped,
+  });
   const versionId = createPayload.version_id;
 
   for (const { chunkId, chunk } of chunkPlan.chunks) {
@@ -176,6 +327,7 @@ async function uploadZipVersionHttp(session, options) {
     versionId,
     version: preparedMetadata.version,
     releaseCandidate: Boolean(releaseCandidate),
+    deletedOldestVersion,
     finalAsset,
   };
 }
@@ -183,6 +335,8 @@ async function uploadZipVersionHttp(session, options) {
 module.exports = {
   DEFAULT_CHUNK_COUNT,
   DEFAULT_CHANGELOG,
+  MAX_VERSIONS_ERROR_CODE,
+  MAX_VERSIONS_MESSAGE,
   splitIntoChunks,
   uploadZipVersionHttp,
 };

@@ -58,7 +58,8 @@ Each uploaded resource repository must contain `cfx_uploader.json` at its root:
 ```json
 {
   "portalName": "jo_chest 2",
-  "foldersToZip": ["jo_chest"]
+  "foldersToZip": ["jo_chest"],
+  "deleteOldestVersionWhenCapped": false
 }
 ```
 
@@ -66,6 +67,7 @@ Fields:
 
 - `portalName`: exact CFX Portal asset name
 - `foldersToZip`: folders from the release source ZIP to include in the final upload ZIP
+- `deleteOldestVersionWhenCapped`: optional destructive opt-in. When `true`, CFX Uploader may delete the oldest CFX asset version if the asset has reached the 5-version limit.
 
 ## Changelog
 
@@ -99,6 +101,7 @@ const result = await uploader.upload({
   repository: payload.repository.full_name,
   releaseTag: payload.release?.tag_name,
   releaseCandidate: Boolean(payload.release?.prerelease),
+  deleteOldestVersionWhenCapped: false,
   changelog: payload.release?.body,
 });
 ```
@@ -112,6 +115,7 @@ const result = await upload({
   repository: 'Jump-On-Studios/RedM-jo_chest',
   releaseTag: 'v1.1.2',
   releaseCandidate: false,
+  deleteOldestVersionWhenCapped: false,
   changelog: 'Bug fixes and improvements.',
   githubToken: process.env.GITHUB_TOKEN,
   passkey: {
@@ -138,9 +142,12 @@ The library returns a structured result on success:
   portalName,
   version,
   assetId,
-  versionId
+  versionId,
+  deletedOldestVersion
 }
 ```
+
+`deletedOldestVersion` is `null` unless `deleteOldestVersionWhenCapped` was enabled and CFX Uploader had to delete a capped asset version before retrying the upload.
 
 ## Release Candidate / Beta
 
@@ -164,6 +171,43 @@ await upload({
 ```
 
 When `releaseCandidate` is omitted, CFX Uploader uses the resolved GitHub release metadata. This automatic behavior works best when a specific release tag is provided, as GitHub `/releases/latest` does not return pre-releases.
+
+## CFX 5-Version Limit
+
+CFX Portal currently allows a maximum of 5 versions per asset. By default, CFX Uploader does not delete anything automatically. If the asset is capped, the upload fails with a clear `MAX_VERSIONS_REACHED` message.
+
+You can opt in to automatic cleanup:
+
+```json
+{
+  "portalName": "CFX Uploader Test",
+  "foldersToZip": ["cfx_uploader_test"],
+  "deleteOldestVersionWhenCapped": true
+}
+```
+
+Or from library code:
+
+```js
+await upload({
+  repository,
+  releaseTag,
+  githubToken,
+  passkey,
+  deleteOldestVersionWhenCapped: true,
+});
+```
+
+When enabled, CFX Uploader:
+
+1. fails first if the version from `fxmanifest.lua` already exists;
+2. detects CFX `409 MAX_VERSIONS_REACHED` during version creation;
+3. refetches the asset details;
+4. deletes the version with the oldest `created_at`;
+5. waits until the asset is below the limit;
+6. retries version creation once.
+
+This is intentionally destructive. Use it only for assets where deleting the oldest CFX version is acceptable.
 
 ## Upload Errors
 
@@ -198,6 +242,10 @@ The HTTP upload flow covers release download, ZIP preparation, CFX authenticatio
 | Asset lookup | `CFX asset not found by exact name "...". First assets: ...` | `portalName` does not exactly match an owned CFX asset. |
 | Asset lookup | `CFX asset "..." is missing an id...` | The matching CFX asset response is malformed. |
 | Upload validation | `Version already exists on asset "...": ...` | The version from `fxmanifest.lua` already exists on the CFX asset. |
+| Upload create | `CFX asset has reached the maximum of 5 versions...` | The asset is capped and `deleteOldestVersionWhenCapped` is disabled. |
+| Upload create | `MAX_VERSIONS_REACHED` | CFX rejected the upload because the asset already has 5 versions. Enable `deleteOldestVersionWhenCapped` if automatic deletion is desired. |
+| Upload cleanup | `DELETE .../versions/... failed (...): ...` | Automatic oldest-version deletion was enabled, but CFX rejected the delete request. |
+| Upload cleanup | `Timed out waiting for CFX version deletion...` | The oldest version was deleted but CFX did not report the asset below the cap before timeout. |
 | Upload create | `CFX re-upload rejected: ...` | CFX rejected the version creation payload. |
 | Upload create | `CFX re-upload response missing version_id: ...` | CFX did not return the expected version id. |
 | Chunk upload | `Chunk upload failed for chunk_id=... (...): ...` | One ZIP chunk failed to upload. |
@@ -277,6 +325,18 @@ npm run orchestrate-http -- --full-release
 
 If neither flag is provided, the CLI uses the resolved GitHub release metadata.
 
+Opt in to automatic oldest-version deletion when CFX reports the 5-version cap:
+
+```bash
+npm run orchestrate-http -- --delete-oldest-version-when-capped
+```
+
+Force it off even if `cfx_uploader.json` enables it:
+
+```bash
+npm run orchestrate-http -- --no-delete-oldest-version-when-capped
+```
+
 ### Browser Mode
 
 Browser mode drives the full CFX Portal UI with Puppeteer. It is useful for debugging portal changes.
@@ -296,6 +356,13 @@ Browser mode supports the same release type flags:
 ```bash
 npm run orchestrate -- --release-candidate
 npm run orchestrate -- --full-release
+```
+
+Browser mode also supports the capped-version flags:
+
+```bash
+npm run orchestrate -- --delete-oldest-version-when-capped
+npm run orchestrate -- --no-delete-oldest-version-when-capped
 ```
 
 ## Release Version Rules

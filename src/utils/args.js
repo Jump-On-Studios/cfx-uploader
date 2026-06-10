@@ -42,7 +42,29 @@ function parseReleaseCandidateFromArgs(args = process.argv.slice(2)) {
   return undefined;
 }
 
+function parseDeleteOldestVersionWhenCappedFromArgs(args = process.argv.slice(2)) {
+  const enabled = args.includes('--delete-oldest-version-when-capped');
+  const disabled = args.includes('--no-delete-oldest-version-when-capped');
+
+  if (enabled && disabled) {
+    throw new Error(
+      'Invalid capped-version flags: use either --delete-oldest-version-when-capped or --no-delete-oldest-version-when-capped, not both.'
+    );
+  }
+
+  if (enabled) {
+    return true;
+  }
+
+  if (disabled) {
+    return false;
+  }
+
+  return undefined;
+}
+
 module.exports = {
   parseHeadlessFromArgs,
   parseReleaseCandidateFromArgs,
+  parseDeleteOldestVersionWhenCappedFromArgs,
 };

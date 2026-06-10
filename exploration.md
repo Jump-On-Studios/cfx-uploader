@@ -874,3 +874,246 @@ Desktop conclusion:
 - The notes from the first exploration are accurate for the actual flow.
 - For Puppeteer's current `1280x800` viewport, automation should expect the desktop table path, not the responsive card path.
 - The most robust implementation should still support both layouts by detecting the visible container.
+
+## Asset Version Cap And Delete Flow
+
+Exploration date: 2026-06-10
+
+Target asset:
+
+```text
+Asset name: CFX Uploader Test
+Asset id: 1016632
+```
+
+Observed cap:
+
+```text
+Maximum versions: 5
+```
+
+When the asset has 5 versions, CFX rejects HTTP upload creation:
+
+```text
+POST https://portal-api.cfx.re/v1/assets/1016632/re-upload
+409 {"error":"asset has reached the maximum number of versions","error_code":"MAX_VERSIONS_REACHED"}
+```
+
+In the UI version modal:
+
+```text
+Asset Versions 5/5
+UPLOAD NEW VERSION disabled
+```
+
+Hover tooltip observed on disabled upload button:
+
+```text
+This asset has reached the maximum of 5 versions.
+Delete an existing version to upload a new one.
+```
+
+### Asset Details Shape
+
+`GET /v1/assets/:assetId` returns versions sorted newest-first.
+
+Relevant response shape:
+
+```json
+{
+  "id": 1016632,
+  "name": "CFX Uploader Test",
+  "state": "active",
+  "chunk_status": [true, true, true, true],
+  "updated_at": "2026-06-10T12:18:27Z",
+  "is_disabled": false,
+  "disabled_reason": null,
+  "versions": [
+    {
+      "id": 1440896,
+      "version": "1.0.3",
+      "state": "active",
+      "created_at": "2026-06-10T12:18:27Z",
+      "changelog": "Release 1.0.3",
+      "is_release_candidate": false,
+      "packs": [{ "id": 1278197, "game": "" }]
+    }
+  ]
+}
+```
+
+Observed versions before deletion:
+
+| Order | Version | Version ID | Created At | Release Candidate |
+|---:|---|---:|---|---|
+| 1 | 1.0.3 | 1440896 | 2026-06-10T12:18:27Z | false |
+| 2 | 1.0.2 | 1440894 | 2026-06-10T12:16:25Z | false |
+| 3 | 1.0.2.beta | 1440888 | 2026-06-10T12:12:26Z | true |
+| 4 | 1.0.1 | 1440727 | 2026-06-10T09:54:11Z | false |
+| 5 | 1.0.0 | 1438376 | 2026-06-09T12:26:32Z | false |
+
+Automation should pick the oldest version by the lowest `created_at`. The current API order also places oldest last, but `created_at` is the safer rule.
+
+### Version Modal DOM
+
+Open version modal from the created-assets table using the icon-only button:
+
+```html
+<button title="View versions" class="... CreatedAssetsTable_modalButton__kWkoL ...">
+```
+
+Modal text at cap:
+
+```text
+CFX Uploader Test
+Asset Versions
+5/5
+V 1.0.3
+Uploaded: 6/10/2026
+Release Notes
+DOWNLOAD
+...
+V 1.0.0
+Uploaded: 6/9/2026
+DOWNLOAD
+CLOSE
+UPLOAD NEW VERSION
+```
+
+Each version row uses:
+
+```text
+AssetVersionModal_versionRow__8UHJ0
+```
+
+Inside a row:
+
+```text
+button text="Download"
+icon-only button: delete/trash
+icon-only button: edit pencil
+```
+
+The delete/trash button has no stable text, title, or aria-label. It can be identified by the SVG path prefix:
+
+```text
+M13 4.25H10.75V3C10.75...
+```
+
+The edit pencil button has SVG path prefix:
+
+```text
+M2.99002 13.76C2.79002...
+```
+
+For browser automation, the robust approach is:
+
+1. Open the versions modal.
+2. Find a row containing exact text `V <version>`.
+3. Find closest `[class*="AssetVersionModal_versionRow"]`.
+4. Click the icon button whose `path[d]` starts with `M13 4.25`.
+
+### Delete Confirmation
+
+Clicking the trash button opens a confirmation modal:
+
+```text
+Delete version?
+Are you sure you want to delete version 1.0.0?
+This action cannot be undone.
+CANCEL
+DELETE
+```
+
+Confirmation buttons:
+
+```text
+Cancel
+Delete
+```
+
+The `Delete` button is a normal text button:
+
+```html
+<button class="... cfxui__Button__primary__1c59f ...">Delete</button>
+```
+
+### Delete HTTP Endpoint
+
+Deleting version `1.0.0` from asset `1016632` called:
+
+```http
+DELETE https://portal-api.cfx.re/v1/assets/1016632/versions/1438376
+```
+
+Request body:
+
+```text
+none
+```
+
+Observed browser network:
+
+```text
+OPTIONS /v1/assets/1016632/versions/1438376 -> 204
+DELETE  /v1/assets/1016632/versions/1438376 -> 200 {}
+GET     /v1/assets/1016632                 -> 200 updated asset details
+```
+
+The existing CFX HTTP session headers used for upload should be valid for this endpoint:
+
+```text
+origin: https://portal.cfx.re
+referer: https://portal.cfx.re/
+cookie: <portal cookies>
+user-agent: <browser UA>
+```
+
+### Post Delete State
+
+After deleting oldest version `1.0.0`:
+
+```text
+Asset Versions 4/5
+UPLOAD NEW VERSION enabled
+```
+
+`GET /v1/assets/1016632` returned:
+
+| Order | Version | Version ID | Created At | Release Candidate |
+|---:|---|---:|---|---|
+| 1 | 1.0.3 | 1440896 | 2026-06-10T12:18:27Z | false |
+| 2 | 1.0.2 | 1440894 | 2026-06-10T12:16:25Z | false |
+| 3 | 1.0.2.beta | 1440888 | 2026-06-10T12:12:26Z | true |
+| 4 | 1.0.1 | 1440727 | 2026-06-10T09:54:11Z | false |
+
+### Automation Notes
+
+Recommended option name:
+
+```text
+deleteOldestVersionWhenCapped
+```
+
+Default should be `false` because deleting versions is destructive.
+
+HTTP mode recommended behavior:
+
+1. Attempt normal `POST /v1/assets/:assetId/re-upload`.
+2. If response is not `MAX_VERSIONS_REACHED`, keep current behavior.
+3. If response is `MAX_VERSIONS_REACHED` and `deleteOldestVersionWhenCapped !== true`, fail clearly.
+4. If enabled:
+   - fetch latest `GET /v1/assets/:assetId`;
+   - select oldest version by `created_at`;
+   - `DELETE /v1/assets/:assetId/versions/:versionId`;
+   - refetch asset details until version count decreases;
+   - retry `POST /re-upload` once.
+
+Browser mode recommended behavior:
+
+1. Detect disabled `UPLOAD NEW VERSION` in versions modal.
+2. If auto-delete is disabled, fail with tooltip/cap message.
+3. If enabled, delete the oldest row using the trash icon path.
+4. Confirm `Delete`.
+5. Wait for `Asset Versions 4/5` or enabled `UPLOAD NEW VERSION`.
+6. Continue upload flow.

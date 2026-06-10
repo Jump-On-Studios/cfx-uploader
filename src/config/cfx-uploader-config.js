@@ -43,10 +43,18 @@ function normalizeConfig(rawConfig, githubRepository, sourcePath) {
     throw new Error(`Invalid ${CONFIG_FILE_NAME}: foldersToZip must contain at least one folder.`);
   }
 
+  if (
+    rawConfig.deleteOldestVersionWhenCapped !== undefined &&
+    typeof rawConfig.deleteOldestVersionWhenCapped !== 'boolean'
+  ) {
+    throw new Error(`Invalid ${CONFIG_FILE_NAME}: deleteOldestVersionWhenCapped must be a boolean when provided.`);
+  }
+
   return {
     githubRepository,
     portalName,
     foldersToZip,
+    deleteOldestVersionWhenCapped: Boolean(rawConfig.deleteOldestVersionWhenCapped),
     configPath: sourcePath,
     configSource: sourcePath ? CONFIG_FILE_NAME : 'mock-config.js',
   };

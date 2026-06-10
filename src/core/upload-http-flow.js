@@ -31,6 +31,7 @@ async function runHttpUploadFlow(options) {
     fallbackConfig = {},
     headless = true,
     releaseCandidate,
+    deleteOldestVersionWhenCapped,
     changelog = null,
     releasesDir = path.join(projectRoot, 'releases'),
     tempExtractDir = path.join(releasesDir, '.tmp-extract'),
@@ -78,9 +79,15 @@ async function runHttpUploadFlow(options) {
     });
     const topLevelFolders = await listTopLevelFolders(unzippedRootPath);
     const config = await readCfxUploaderConfig(unzippedRootPath, repository, fallbackConfig);
+    const resolvedDeleteOldestVersionWhenCapped = typeof deleteOldestVersionWhenCapped === 'boolean'
+      ? deleteOldestVersionWhenCapped
+      : Boolean(config.deleteOldestVersionWhenCapped);
     log(`Config source: ${config.configPath || config.configSource}`);
     log(`Portal asset: ${config.portalName}`, { portalName: config.portalName });
     log(`Folders to ZIP: ${config.foldersToZip.join(', ')}`, { foldersToZip: config.foldersToZip });
+    log(`Delete oldest version when capped: ${resolvedDeleteOldestVersionWhenCapped}`, {
+      deleteOldestVersionWhenCapped: resolvedDeleteOldestVersionWhenCapped,
+    });
 
     createdZipPath = await createFilteredZip({
       unzippedRootPath,
@@ -127,6 +134,7 @@ async function runHttpUploadFlow(options) {
       zipPath: createdZipPath,
       changelog: changelog ?? releaseInfo.body,
       releaseCandidate: resolvedReleaseCandidate,
+      deleteOldestVersionWhenCapped: resolvedDeleteOldestVersionWhenCapped,
     });
 
     log(`HTTP upload complete: asset=${uploadResult.assetId}, version_id=${uploadResult.versionId}, version=${uploadResult.version}`);
@@ -142,6 +150,7 @@ async function runHttpUploadFlow(options) {
       version: uploadResult.version,
       assetId: uploadResult.assetId,
       versionId: uploadResult.versionId,
+      deletedOldestVersion: uploadResult.deletedOldestVersion,
       finalAsset: uploadResult.finalAsset,
     };
   } finally {

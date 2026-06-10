@@ -38,6 +38,13 @@ function validateUploadOptions(options) {
   ) {
     throw new Error('Upload option "releaseCandidate" must be a boolean when provided.');
   }
+
+  if (
+    options.deleteOldestVersionWhenCapped !== undefined &&
+    typeof options.deleteOldestVersionWhenCapped !== 'boolean'
+  ) {
+    throw new Error('Upload option "deleteOldestVersionWhenCapped" must be a boolean when provided.');
+  }
 }
 
 async function upload(options = {}) {
@@ -57,6 +64,7 @@ async function upload(options = {}) {
     fallbackConfig: {},
     headless: options.headless !== false,
     releaseCandidate: options.releaseCandidate,
+    deleteOldestVersionWhenCapped: options.deleteOldestVersionWhenCapped,
     changelog: options.changelog ?? null,
     releasesDir: path.join(workDir, 'releases'),
     onLog,

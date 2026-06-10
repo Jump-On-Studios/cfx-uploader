@@ -5,6 +5,8 @@
 const fs = require('fs/promises');
 
 const DEFAULT_RELEASE_NOTES = 'Automated upload from cfx-uploader.';
+const MAX_VERSIONS_MESSAGE = 'CFX asset has reached the maximum of 5 versions. Enable deleteOldestVersionWhenCapped to delete the oldest version automatically.';
+const TRASH_ICON_PATH_PREFIX = 'M13 4.25H10.75V3C10.75';
 
 /**
  * Helper wait used for client-side table filtering/render refresh.
@@ -234,7 +236,274 @@ async function selectAssetByName(options) {
  * @param {import('puppeteer').Page} page
  * @returns {Promise<void>}
  */
-async function clickUploadNewVersionButton(page) {
+async function getUploadNewVersionButtonState(page) {
+  return retryOnNavigationContext(() =>
+    page.evaluate(() => {
+      const normalize = (value) => (value || '').replace(/\s+/g, ' ').trim();
+      const isVisible = (element) => {
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+      };
+
+      const buttons = Array.from(document.querySelectorAll('button'));
+      const button = buttons.find((candidate) =>
+        normalize(candidate.textContent).toLowerCase() === 'upload new version' &&
+        isVisible(candidate)
+      );
+
+      if (!button) {
+        return { found: false, enabled: false, text: '' };
+      }
+
+      const modal = document.querySelector('#overlay-outlet');
+      return {
+        found: true,
+        enabled: !button.disabled && !button.hasAttribute('disabled') && button.getAttribute('aria-disabled') !== 'true',
+        text: modal ? normalize(modal.innerText || modal.textContent || '') : normalize(document.body.innerText || ''),
+      };
+    })
+  );
+}
+
+async function waitForUploadNewVersionButtonEnabled(page) {
+  return retryOnNavigationContext(() =>
+    page.waitForFunction(() => {
+      const normalize = (value) => (value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      const isVisible = (element) => {
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+      };
+
+      const buttons = Array.from(document.querySelectorAll('button'));
+      return buttons.some((button) =>
+        normalize(button.textContent) === 'upload new version' &&
+        isVisible(button) &&
+        !button.disabled &&
+        !button.hasAttribute('disabled') &&
+        button.getAttribute('aria-disabled') !== 'true' &&
+        !button.className.includes('disabled')
+      );
+    }, { timeout: 30000 })
+  );
+}
+
+async function deleteOldestVisibleVersionFromModal(page) {
+  const deletionTarget = await retryOnNavigationContext(() =>
+    page.evaluate((trashIconPathPrefix) => {
+      const normalize = (value) => (value || '').replace(/\s+/g, ' ').trim();
+      const isVisible = (element) => {
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+      };
+      const parseUploadedDate = (text) => {
+        const match = text.match(/Uploaded:\s*([0-9]{1,2}\/[0-9]{1,2}\/[0-9]{4})/i);
+        if (!match) return Number.NaN;
+        const [month, day, year] = match[1].split('/').map(Number);
+        return new Date(year, month - 1, day).getTime();
+      };
+      const extractVersion = (text) => {
+        const match = text.match(/\bV\s+([^\s]+)/i);
+        return match ? match[1] : 'unknown';
+      };
+      const rows = Array.from(document.querySelectorAll('[class*="AssetVersionModal_versionRow"]'))
+        .filter(isVisible)
+        .map((row, index) => ({
+          row,
+          index,
+          text: normalize(row.innerText || row.textContent || ''),
+          uploadedAt: parseUploadedDate(row.innerText || row.textContent || ''),
+        }));
+
+      if (rows.length === 0) {
+        return { clicked: false, reason: 'No visible asset version rows found.' };
+      }
+
+      rows.sort((a, b) => {
+        const aTime = Number.isNaN(a.uploadedAt) ? Number.POSITIVE_INFINITY : a.uploadedAt;
+        const bTime = Number.isNaN(b.uploadedAt) ? Number.POSITIVE_INFINITY : b.uploadedAt;
+        if (aTime !== bTime) return aTime - bTime;
+        return b.index - a.index;
+      });
+
+      const target = rows[0];
+      const buttons = Array.from(target.row.querySelectorAll('button'));
+      const deleteButton = buttons.find((button) => {
+        const path = button.querySelector('svg path');
+        return path && (path.getAttribute('d') || '').startsWith(trashIconPathPrefix);
+      });
+
+      if (!deleteButton) {
+        return { clicked: false, reason: `Delete button not found for row: ${target.text}` };
+      }
+
+      deleteButton.click();
+      return {
+        clicked: true,
+        version: extractVersion(target.text),
+        rowText: target.text,
+      };
+    }, TRASH_ICON_PATH_PREFIX)
+  );
+
+  if (!deletionTarget.clicked) {
+    throw new Error(`Failed to delete oldest CFX version in browser flow: ${deletionTarget.reason}`);
+  }
+
+  const confirmReady = await retryOnNavigationContext(() =>
+    page.waitForFunction(() => {
+      const overlay = document.querySelector('#overlay-outlet');
+      if (!overlay) return false;
+      const text = (overlay.innerText || overlay.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      return text.includes('delete version?') && text.includes('this action cannot be undone');
+    }, { timeout: 10000 })
+  )
+    .then(() => true)
+    .catch(() => false);
+
+  if (!confirmReady) {
+    throw new Error(`Delete confirmation modal did not open for CFX version ${deletionTarget.version}.`);
+  }
+
+  const confirmed = await retryOnNavigationContext(() =>
+    page.evaluate(() => {
+      const overlay = document.querySelector('#overlay-outlet');
+      if (!overlay) return false;
+      const buttons = Array.from(overlay.querySelectorAll('button'));
+      const deleteButton = buttons.find((button) =>
+        (button.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase() === 'delete'
+      );
+      if (!deleteButton || deleteButton.disabled) return false;
+      deleteButton.click();
+      return true;
+    })
+  );
+
+  if (!confirmed) {
+    throw new Error(`Failed to confirm deletion for CFX version ${deletionTarget.version}.`);
+  }
+
+  await retryOnNavigationContext(() =>
+    page.waitForFunction(
+      (deletedVersion) => {
+        const overlay = document.querySelector('#overlay-outlet');
+        if (!overlay) return false;
+
+        const normalize = (value) => (value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+        const text = normalize(overlay.innerText || overlay.textContent || '');
+        const uploadButtonEnabled = Array.from(overlay.querySelectorAll('button')).some((button) =>
+          normalize(button.textContent) === 'upload new version' &&
+          !button.disabled &&
+          !button.hasAttribute('disabled') &&
+          button.getAttribute('aria-disabled') !== 'true' &&
+          !button.className.includes('disabled')
+        );
+
+        return text.includes('asset versions 4/5') || (uploadButtonEnabled && !text.includes('maximum of 5 versions'));
+      },
+      { timeout: 30000 },
+      deletionTarget.version
+    )
+  ).catch(async (error) => {
+    const modalText = await page
+      .evaluate(() => {
+        const overlay = document.querySelector('#overlay-outlet');
+        return overlay ? (overlay.innerText || overlay.textContent || '').replace(/\s+/g, ' ').trim() : '';
+      })
+      .catch(() => '');
+    throw new Error(`Timed out waiting for CFX version deletion in browser flow. Deleted version: ${deletionTarget.version}. Modal text: ${modalText || error.message}`);
+  });
+
+  await waitForUploadNewVersionButtonEnabled(page).catch(async (error) => {
+    const modalText = await page
+      .evaluate(() => {
+        const overlay = document.querySelector('#overlay-outlet');
+        return overlay ? (overlay.innerText || overlay.textContent || '').replace(/\s+/g, ' ').trim() : '';
+      })
+      .catch(() => '');
+    throw new Error(`Timed out waiting for UPLOAD NEW VERSION to become enabled after deletion. Modal text: ${modalText || error.message}`);
+  });
+  await sleep(3000);
+  return deletionTarget;
+}
+
+async function handleCappedUploadModalIfNeeded(page, options = {}) {
+  const { deleteOldestVersionWhenCapped = false } = options;
+  const cappedModal = await retryOnNavigationContext(() =>
+    page.evaluate(() => {
+      const overlay = document.querySelector('#overlay-outlet');
+      if (!overlay) {
+        return { capped: false, text: '' };
+      }
+
+      const text = (overlay.innerText || overlay.textContent || '').replace(/\s+/g, ' ').trim();
+      const normalized = text.toLowerCase();
+
+      return {
+        capped: normalized.includes('this asset has reached the maximum of 5 versions'),
+        text,
+      };
+    })
+  );
+
+  if (!cappedModal.capped) {
+    return false;
+  }
+
+  if (!deleteOldestVersionWhenCapped) {
+    throw new Error(`${MAX_VERSIONS_MESSAGE} Modal text: ${cappedModal.text}`);
+  }
+
+  const openedVersions = await retryOnNavigationContext(() =>
+    page.evaluate(() => {
+      const overlay = document.querySelector('#overlay-outlet');
+      if (!overlay) return false;
+
+      const buttons = Array.from(overlay.querySelectorAll('button'));
+      const viewVersionsButton = buttons.find((button) =>
+        (button.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase() === 'view versions'
+      );
+
+      if (!viewVersionsButton || viewVersionsButton.disabled) {
+        return false;
+      }
+
+      viewVersionsButton.click();
+      return true;
+    })
+  );
+
+  if (!openedVersions) {
+    throw new Error(`CFX asset is capped, but the VIEW VERSIONS button could not be clicked. Modal text: ${cappedModal.text}`);
+  }
+
+  await retryOnNavigationContext(() =>
+    page.waitForFunction(() => {
+      const overlay = document.querySelector('#overlay-outlet');
+      if (!overlay) return false;
+      const text = (overlay.innerText || overlay.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      return text.includes('asset versions');
+    }, { timeout: 30000 })
+  ).catch(async (error) => {
+    const modalText = await page
+      .evaluate(() => {
+        const overlay = document.querySelector('#overlay-outlet');
+        return overlay ? (overlay.innerText || overlay.textContent || '').replace(/\s+/g, ' ').trim() : '';
+      })
+      .catch(() => '');
+    throw new Error(`Timed out waiting for CFX versions modal after VIEW VERSIONS. Modal text: ${modalText || error.message}`);
+  });
+
+  const deletedVersion = await deleteOldestVisibleVersionFromModal(page);
+  console.log(`Deleted oldest CFX version in browser flow before retry: version=${deletedVersion.version}`);
+
+  return true;
+}
+
+async function clickUploadNewVersionButton(page, options = {}) {
+  const { deleteOldestVersionWhenCapped = false } = options;
   const found = await retryOnNavigationContext(() =>
     page.waitForFunction(() => {
       const buttons = document.querySelectorAll('button');
@@ -245,8 +514,8 @@ async function clickUploadNewVersionButton(page) {
           button.getClientRects().length > 0 &&
           getComputedStyle(button).visibility !== 'hidden' &&
           getComputedStyle(button).display !== 'none';
-        const enabled = !button.disabled && !button.hasAttribute('disabled');
-        if (label === 'upload new version' && visible && enabled) return true;
+          const enabled = !button.disabled && !button.hasAttribute('disabled');
+        if (label === 'upload new version' && visible && enabled && button.getAttribute('aria-disabled') !== 'true' && !button.className.includes('disabled')) return true;
       }
       return false;
     }, { timeout: 30000 })
@@ -255,7 +524,18 @@ async function clickUploadNewVersionButton(page) {
     .catch(() => false);
 
   if (!found) {
-    throw new Error('UPLOAD NEW VERSION button not found after selecting asset.');
+    const buttonState = await getUploadNewVersionButtonState(page);
+
+    if (buttonState.found && !buttonState.enabled) {
+      if (!deleteOldestVersionWhenCapped) {
+        throw new Error(`${MAX_VERSIONS_MESSAGE} Modal text: ${buttonState.text}`);
+      }
+
+      const deletedVersion = await deleteOldestVisibleVersionFromModal(page);
+      console.log(`Deleted oldest CFX version in browser flow before retry: version=${deletedVersion.version}`);
+    } else {
+      throw new Error('UPLOAD NEW VERSION button not found after selecting asset.');
+    }
   }
 
   for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -270,7 +550,7 @@ async function clickUploadNewVersionButton(page) {
             getComputedStyle(button).visibility !== 'hidden' &&
             getComputedStyle(button).display !== 'none';
           const enabled = !button.disabled && !button.hasAttribute('disabled');
-          if (label === 'upload new version' && visible && enabled) {
+          if (label === 'upload new version' && visible && enabled && button.getAttribute('aria-disabled') !== 'true' && !button.className.includes('disabled')) {
             button.click();
             return true;
           }
@@ -602,7 +882,7 @@ async function waitForUploadSettled(options) {
 
 /**
  * Full upload flow once user is authenticated and on the Created Assets page.
- * @param {{ page: import('puppeteer').Page, portalName: string, zipPath: string, releaseNotes?: string, releaseCandidate?: boolean }} options
+ * @param {{ page: import('puppeteer').Page, portalName: string, zipPath: string, releaseNotes?: string, releaseCandidate?: boolean, deleteOldestVersionWhenCapped?: boolean }} options
  * @returns {Promise<void>}
  */
 async function uploadZipToCfxAsset(options) {
@@ -612,11 +892,16 @@ async function uploadZipToCfxAsset(options) {
     zipPath,
     releaseNotes = DEFAULT_RELEASE_NOTES,
     releaseCandidate = false,
+    deleteOldestVersionWhenCapped = false,
   } = options;
 
   await filterByAssetName({ page, assetName: portalName });
   await selectAssetByName({ page, assetName: portalName });
-  await clickUploadNewVersionButton(page);
+  await clickUploadNewVersionButton(page, { deleteOldestVersionWhenCapped });
+  const cappedModalHandled = await handleCappedUploadModalIfNeeded(page, { deleteOldestVersionWhenCapped });
+  if (cappedModalHandled) {
+    await clickUploadNewVersionButton(page, { deleteOldestVersionWhenCapped });
+  }
   await selectReleaseTypeInModal({ page, releaseCandidate });
   await uploadZipInModal({ page, zipPath });
   await clickModalNextButton(page);

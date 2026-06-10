@@ -29,6 +29,7 @@ async function runBrowserUploadFlow(options) {
     fallbackConfig = {},
     headless = true,
     releaseCandidate,
+    deleteOldestVersionWhenCapped,
     releasesDir = path.join(projectRoot, 'releases'),
     tempExtractDir = path.join(releasesDir, '.tmp-extract'),
   } = options;
@@ -72,9 +73,13 @@ async function runBrowserUploadFlow(options) {
     });
     const topLevelFolders = await listTopLevelFolders(unzippedRootPath);
     const config = await readCfxUploaderConfig(unzippedRootPath, repository, fallbackConfig);
+    const resolvedDeleteOldestVersionWhenCapped = typeof deleteOldestVersionWhenCapped === 'boolean'
+      ? deleteOldestVersionWhenCapped
+      : Boolean(config.deleteOldestVersionWhenCapped);
     console.log(`Config source: ${config.configPath || config.configSource}`);
     console.log(`Portal asset: ${config.portalName}`);
     console.log(`Folders to ZIP: ${config.foldersToZip.join(', ')}`);
+    console.log(`Delete oldest version when capped: ${resolvedDeleteOldestVersionWhenCapped}`);
 
     createdZipPath = await createFilteredZip({
       unzippedRootPath,
@@ -110,6 +115,7 @@ async function runBrowserUploadFlow(options) {
       portalName: config.portalName,
       zipPath: createdZipPath,
       releaseCandidate: resolvedReleaseCandidate,
+      deleteOldestVersionWhenCapped: resolvedDeleteOldestVersionWhenCapped,
     });
 
     await new Promise((resolve) => setTimeout(resolve, 8000));
