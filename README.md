@@ -1,5 +1,8 @@
 # CFX Uploader
 
+[![npm version](https://img.shields.io/npm/v/cfx-uploader.svg)](https://www.npmjs.com/package/cfx-uploader)
+[![npm downloads](https://img.shields.io/npm/dm/cfx-uploader.svg)](https://www.npmjs.com/package/cfx-uploader)
+
 Upload CFX Portal asset versions directly from GitHub releases.
 
 CFX Uploader is designed for automated FiveM/RedM resource publishing. It downloads a GitHub release archive, rebuilds the ZIP expected by CFX Portal, authenticates with a CFX passkey, and uploads the new asset version.
