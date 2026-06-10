@@ -42,8 +42,8 @@ npx cfx-uploader-register-passkey
 
 ```json
 {
-  "portalName": "jo_chest 2",
-  "foldersToZip": ["jo_chest"]
+  "portalName": "Housing",
+  "foldersToZip": ["jo_housing"]
 }
 ```
 
@@ -53,7 +53,7 @@ npx cfx-uploader-register-passkey
 import { upload } from 'cfx-uploader';
 
 await upload({
-  repository: 'Jump-On-Studios/RedM-jo_chest',
+  repository: 'Jump-On-Studios/RedM-jo_housing',
   releaseTag: 'v1.1.2',
   githubToken: process.env.GITHUB_TOKEN,
   passkey: {
@@ -120,8 +120,8 @@ Each uploaded resource repository must contain `cfx_uploader.json` at its root:
 
 ```json
 {
-  "portalName": "jo_chest 2",
-  "foldersToZip": ["jo_chest"],
+  "portalName": "Clothingstore",
+  "foldersToZip": ["jo_clothingstore"],
   "deleteOldestVersionWhenCapped": false
 }
 ```
@@ -146,7 +146,7 @@ Fields:
 import { upload } from 'cfx-uploader';
 
 const result = await upload({
-  repository: 'Jump-On-Studios/RedM-jo_chest',
+  repository: 'Jump-On-Studios/RedM-jo_clothingstore',
   releaseTag: 'v1.1.2',
   githubToken: process.env.GITHUB_TOKEN,
   passkey: {
