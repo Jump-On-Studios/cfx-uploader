@@ -47,6 +47,13 @@ function validateUploadOptions(options) {
     throw new Error('Upload option "deleteOldestVersionWhenCapped" must be a boolean when provided.');
   }
 
+  if (
+    options.onProgress !== undefined &&
+    typeof options.onProgress !== 'function'
+  ) {
+    throw new Error('Upload option "onProgress" must be a function when provided.');
+  }
+
   try {
     normalizeMaxPrereleaseVersionsToKeep(options.maxPrereleaseVersionsToKeep, 'Upload option "maxPrereleaseVersionsToKeep"');
   } catch (error) {
@@ -60,6 +67,7 @@ async function upload(options = {}) {
   const workDir = options.workDir || path.join(os.tmpdir(), 'cfx-uploader');
   const passkey = resolveLibraryPasskey(options);
   const onLog = typeof options.onLog === 'function' ? options.onLog : console.log;
+  const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
 
   return runHttpUploadFlow({
     projectRoot: workDir,
@@ -76,6 +84,7 @@ async function upload(options = {}) {
     changelog: options.changelog ?? null,
     releasesDir: path.join(workDir, 'releases'),
     onLog,
+    onProgress,
   });
 }
 

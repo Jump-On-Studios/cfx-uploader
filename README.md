@@ -273,6 +273,21 @@ export async function handleGithubReleaseWebhook(payload) {
 | `maxPrereleaseVersionsToKeep` | no | Overrides the project JSON prerelease retention policy. Use `null` to delete the oldest version regardless of type. Values above `4` are capped to `4`. |
 | `changelog` | no | CFX release notes. Defaults to the GitHub release body. |
 | `onLog` | no | Custom logger callback. Defaults to `console.log`. |
+| `onProgress` | no | Structured progress callback for external UIs, webhooks, or Discord workflow cards. |
+
+`onProgress` receives machine-readable events while `onLog` remains human-readable:
+
+```js
+await upload({
+  repository,
+  releaseTag,
+  githubToken,
+  passkey,
+  onProgress(event) {
+    console.log(`[${event.index}/${event.total}] ${event.label}`);
+  },
+});
+```
 
 ### Result
 
