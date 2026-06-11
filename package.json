@@ -12,8 +12,7 @@
     "index.js",
     "src",
     "README.md",
-    "docs/github-actions-workflow.md",
-    "docs/nuxt-library-plan.md"
+    "docs"
   ],
   "scripts": {
     "orchestrate": "node src/cli/browser-cli.js",

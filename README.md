@@ -17,6 +17,27 @@ The recommended production path is the library or HTTP CLI. Both use Puppeteer o
 
 Temporary files are always cleaned up after a run, including failed runs: downloaded release archives, extraction folders, and generated upload ZIPs are not kept.
 
+## Table of Contents
+
+- [Install](#install)
+- [Quick Start](#quick-start)
+- [Passkey Setup](#passkey-setup)
+- [Resource Configuration](#resource-configuration)
+- [Library Usage](#library-usage)
+- [CLI Usage](#cli-usage)
+- [Release Types](#release-types)
+- [Version Rules](#version-rules)
+- [CFX 5-Version Limit](#cfx-5-version-limit)
+- [Changelog](#changelog)
+- [Environment Variables](#environment-variables)
+- [Security Notes](#security-notes)
+- [Error Handling](#error-handling)
+- [Troubleshooting](#troubleshooting)
+- [Additional Documentation](#additional-documentation)
+- [GitHub Actions](#github-actions)
+- [Project Structure](#project-structure)
+- [Scripts](#scripts)
+
 ## Install
 
 ```bash
@@ -69,6 +90,8 @@ await upload({
 ## Passkey Setup
 
 Passkey registration is required before CFX Uploader can authenticate to CFX.
+
+The passkey registration script is based on work by [ilovehugetits/9am-build](https://github.com/ilovehugetits/9am-build). Thanks for the original implementation.
 
 From a project where `cfx-uploader` is installed, run:
 
@@ -188,6 +211,50 @@ await uploader.upload({
   releaseCandidate: Boolean(payload.release?.prerelease),
   changelog: payload.release?.body,
 });
+```
+
+### Minimal webhook example
+
+This example mirrors a common release-webhook integration: upload the published GitHub release to CFX, keep at most 2 prerelease versions, and expose the deleted CFX version for a private team notification.
+
+```js
+import { createUploader } from 'cfx-uploader';
+
+const uploader = createUploader({
+  githubToken: process.env.GITHUB_TOKEN,
+  passkey: {
+    credentialId: process.env.CFX_UPLOADER_CREDENTIAL_ID,
+    rpId: process.env.CFX_UPLOADER_RP_ID,
+    privateKey: process.env.CFX_UPLOADER_PRIVATE_KEY,
+    userHandle: process.env.CFX_UPLOADER_USER_HANDLE,
+    signCount: Number(process.env.CFX_UPLOADER_SIGN_COUNT),
+  },
+  headless: true,
+  workDir: process.env.CFX_UPLOADER_WORKDIR,
+});
+
+export async function handleGithubReleaseWebhook(payload) {
+  if (payload.action !== 'published') {
+    return { status: 'ignored' };
+  }
+
+  const result = await uploader.upload({
+    repository: payload.repository.full_name,
+    releaseTag: payload.release.tag_name,
+    releaseCandidate: Boolean(payload.release.prerelease),
+    changelog: payload.release.body || undefined,
+    deleteOldestVersionWhenCapped: true,
+    maxPrereleaseVersionsToKeep: 2,
+  });
+
+  if (result.deletedVersion) {
+    console.log(
+      `Deleted CFX version ${result.deletedVersion.version} before uploading ${result.version}`
+    );
+  }
+
+  return result;
+}
 ```
 
 ### Options
@@ -523,6 +590,75 @@ Common errors:
 | Local files | `ENOENT`, permission, or filesystem errors | A downloaded or generated ZIP file could not be read or written. |
 
 Local ZIPs and downloaded archives are not kept after failures. To inspect an upload ZIP, reproduce the run locally with a debugger or inspect the GitHub release source.
+
+## Troubleshooting
+
+### Puppeteer Chrome dependencies on Ubuntu
+
+CFX Uploader uses Puppeteer to authenticate with CFX before the HTTP upload starts. On a minimal Ubuntu server, Chromium may fail to start if system libraries are missing.
+
+Typical error:
+
+```text
+Failed to launch the browser process: Code: 127
+error while loading shared libraries: libatk-1.0.so.0: cannot open shared object file: No such file or directory
+```
+
+Install the common Chromium runtime dependencies:
+
+```bash
+sudo apt update
+
+sudo apt install -y \
+  ca-certificates \
+  fonts-liberation \
+  libasound2 \
+  libatk-bridge2.0-0 \
+  libatk1.0-0 \
+  libcairo2 \
+  libcups2 \
+  libdbus-1-3 \
+  libdrm2 \
+  libexpat1 \
+  libgbm1 \
+  libglib2.0-0 \
+  libgtk-3-0 \
+  libnspr4 \
+  libnss3 \
+  libpango-1.0-0 \
+  libx11-6 \
+  libx11-xcb1 \
+  libxcb1 \
+  libxcomposite1 \
+  libxdamage1 \
+  libxext6 \
+  libxfixes3 \
+  libxkbcommon0 \
+  libxrandr2
+```
+
+Then restart the process running your integration:
+
+```bash
+pm2 restart <app-name>
+```
+
+To verify missing libraries for the Chrome binary downloaded by Puppeteer:
+
+```bash
+ldd /path/to/puppeteer/chrome/chrome-linux64/chrome | grep "not found"
+```
+
+If `ldd` returns no missing libraries but Chrome still fails, check the error message again. Sandbox-related errors are a separate issue from missing shared libraries.
+
+## Additional Documentation
+
+Additional maintainer and integration notes are available in [`docs/`](docs/README.md).
+
+- [GitHub Actions workflow](docs/github-actions-workflow.md)
+- [Nuxt library integration plan](docs/nuxt-library-plan.md)
+- [CFX Portal UI exploration](docs/cfx-portal-exploration.md)
+- [Session notes](docs/session-notes.md)
 
 ## GitHub Actions
 

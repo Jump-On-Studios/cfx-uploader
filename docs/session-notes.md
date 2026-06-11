@@ -518,13 +518,13 @@ Updated:
 ```text
 src/cfx/browser-upload.js
 README.md
-exploration.md
+docs/cfx-portal-exploration.md
 ```
 
 Added:
 
 ```text
-docs/doc.md
+docs/session-notes.md
 ```
 
 Upload module changes:
@@ -623,9 +623,9 @@ The working tree already had `.gitignore` modified before these changes. Current
 
 ```text
 README.md
-exploration.md
+docs/cfx-portal-exploration.md
 src/cfx/browser-upload.js
-docs/doc.md
+docs/session-notes.md
 ```
 
 ## Next Steps
