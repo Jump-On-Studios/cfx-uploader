@@ -1,3 +1,5 @@
+const { normalizeMaxPrereleaseVersionsToKeep } = require('./prerelease-retention');
+
 function parseHeadlessFromArgs(args = process.argv.slice(2)) {
   if (args.includes('--show-browser')) {
     return false;
@@ -63,8 +65,34 @@ function parseDeleteOldestVersionWhenCappedFromArgs(args = process.argv.slice(2)
   return undefined;
 }
 
+function parseMaxPrereleaseVersionsToKeepFromArgs(args = process.argv.slice(2)) {
+  if (args.includes('--no-prerelease-retention')) {
+    const explicitMax = args.find((arg) => arg.startsWith('--max-prerelease-versions-to-keep='));
+    if (explicitMax) {
+      throw new Error(
+        'Invalid prerelease retention flags: use either --max-prerelease-versions-to-keep or --no-prerelease-retention, not both.'
+      );
+    }
+
+    return null;
+  }
+
+  const explicitMax = args.find((arg) => arg.startsWith('--max-prerelease-versions-to-keep='));
+  if (!explicitMax) {
+    return undefined;
+  }
+
+  const value = explicitMax.split('=').slice(1).join('=').trim();
+  if (!/^\d+$/.test(value)) {
+    throw new Error(`Invalid value for --max-prerelease-versions-to-keep: ${value}. Expected an integer >= 0.`);
+  }
+
+  return normalizeMaxPrereleaseVersionsToKeep(Number(value), '--max-prerelease-versions-to-keep');
+}
+
 module.exports = {
   parseHeadlessFromArgs,
   parseReleaseCandidateFromArgs,
   parseDeleteOldestVersionWhenCappedFromArgs,
+  parseMaxPrereleaseVersionsToKeepFromArgs,
 };

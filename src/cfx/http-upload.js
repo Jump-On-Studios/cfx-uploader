@@ -106,27 +106,69 @@ function isMaxVersionsReachedError(error) {
   );
 }
 
-function findOldestVersion(assetDetails) {
+function sortVersionsByCreatedAt(versions) {
+  return [...versions].sort((a, b) => {
+    const aTime = Date.parse(a.created_at || '');
+    const bTime = Date.parse(b.created_at || '');
+
+    if (Number.isNaN(aTime) && Number.isNaN(bTime)) {
+      return 0;
+    }
+
+    if (Number.isNaN(aTime)) {
+      return 1;
+    }
+
+    if (Number.isNaN(bTime)) {
+      return -1;
+    }
+
+    return aTime - bTime;
+  });
+}
+
+function findOldestVersion(versions) {
+  return sortVersionsByCreatedAt(versions)[0] || null;
+}
+
+function normalizeDeletedVersion(version) {
+  if (!version) {
+    return null;
+  }
+
+  return {
+    id: version.id,
+    version: version.version,
+    created_at: version.created_at,
+    releaseCandidate: Boolean(version.is_release_candidate),
+    reason: 'asset-version-cap',
+  };
+}
+
+function resolveVersionToDeleteForCap(assetDetails, options = {}) {
+  const { releaseCandidate = false, maxPrereleaseVersionsToKeep = null } = options;
   const versions = (assetDetails.versions || []).filter((version) => version && version.id);
 
   if (versions.length === 0) {
     return null;
   }
 
-  return versions.reduce((oldest, candidate) => {
-    const oldestTime = Date.parse(oldest.created_at || '');
-    const candidateTime = Date.parse(candidate.created_at || '');
+  if (maxPrereleaseVersionsToKeep === null || maxPrereleaseVersionsToKeep === undefined) {
+    return findOldestVersion(versions);
+  }
 
-    if (Number.isNaN(candidateTime)) {
-      return oldest;
+  const prereleaseVersions = versions.filter((version) => Boolean(version.is_release_candidate));
+  const stableVersions = versions.filter((version) => !Boolean(version.is_release_candidate));
+
+  if (releaseCandidate) {
+    if (prereleaseVersions.length >= maxPrereleaseVersionsToKeep && prereleaseVersions.length > 0) {
+      return findOldestVersion(prereleaseVersions);
     }
 
-    if (Number.isNaN(oldestTime) || candidateTime < oldestTime) {
-      return candidate;
-    }
+    return findOldestVersion(stableVersions) || findOldestVersion(prereleaseVersions) || findOldestVersion(versions);
+  }
 
-    return oldest;
-  }, versions[0]);
+  return findOldestVersion(stableVersions) || findOldestVersion(prereleaseVersions) || findOldestVersion(versions);
 }
 
 async function deleteAssetVersion(session, assetId, version) {
@@ -163,23 +205,22 @@ async function waitForDeletedVersion(session, assetId, deletedVersionId, options
   throw new Error(`Timed out waiting for CFX version deletion: ${JSON.stringify(summarizeAssetState(lastAssetDetails || {}, deletedVersionId))}`);
 }
 
-async function deleteOldestVersionForCap(session, assetId) {
+async function deleteVersionForCap(session, assetId, options = {}) {
   const cappedAssetDetails = await getAssetDetails(session, assetId);
-  const oldestVersion = findOldestVersion(cappedAssetDetails);
+  const versionToDelete = resolveVersionToDeleteForCap(cappedAssetDetails, options);
 
-  if (!oldestVersion) {
+  if (!versionToDelete) {
     throw new Error(`CFX asset ${assetId} is capped but no deletable version was found.`);
   }
 
-  console.log(`Deleting oldest CFX version before retry: id=${oldestVersion.id}, version=${oldestVersion.version}, created_at=${oldestVersion.created_at}`);
-  await deleteAssetVersion(session, assetId, oldestVersion);
-  await waitForDeletedVersion(session, assetId, oldestVersion.id);
+  const deletedVersion = normalizeDeletedVersion(versionToDelete);
+  await deleteAssetVersion(session, assetId, versionToDelete);
+  await waitForDeletedVersion(session, assetId, versionToDelete.id);
+  console.log(
+    `Deleted CFX version before retry: version=${deletedVersion.version}, release_candidate=${deletedVersion.releaseCandidate}, reason=${deletedVersion.reason}`
+  );
 
-  return {
-    id: oldestVersion.id,
-    version: oldestVersion.version,
-    created_at: oldestVersion.created_at,
-  };
+  return deletedVersion;
 }
 
 async function createReUploadWithCapHandling(session, options) {
@@ -190,12 +231,13 @@ async function createReUploadWithCapHandling(session, options) {
     changelog,
     releaseCandidate,
     deleteOldestVersionWhenCapped,
+    maxPrereleaseVersionsToKeep,
   } = options;
 
   try {
     return {
       createPayload: await createReUpload(session, assetId, metadata, chunkPlan, changelog, releaseCandidate),
-      deletedOldestVersion: null,
+      deletedVersion: null,
     };
   } catch (error) {
     if (!isMaxVersionsReachedError(error)) {
@@ -206,11 +248,14 @@ async function createReUploadWithCapHandling(session, options) {
       throw new Error(MAX_VERSIONS_MESSAGE);
     }
 
-    const deletedOldestVersion = await deleteOldestVersionForCap(session, assetId);
+    const deletedVersion = await deleteVersionForCap(session, assetId, {
+      releaseCandidate,
+      maxPrereleaseVersionsToKeep,
+    });
 
     return {
       createPayload: await createReUpload(session, assetId, metadata, chunkPlan, changelog, releaseCandidate),
-      deletedOldestVersion,
+      deletedVersion,
     };
   }
 }
@@ -287,6 +332,7 @@ async function uploadZipVersionHttp(session, options) {
     changelog = DEFAULT_CHANGELOG,
     releaseCandidate = false,
     deleteOldestVersionWhenCapped = false,
+    maxPrereleaseVersionsToKeep = null,
   } = options;
 
   const preparedMetadata = {
@@ -301,13 +347,14 @@ async function uploadZipVersionHttp(session, options) {
   const chunkPlan = splitIntoChunks(zipBuffer);
 
   console.log(`Creating HTTP upload: version=${preparedMetadata.version}, chunks=${chunkPlan.chunkCount}, chunk_size=${chunkPlan.chunkSize}, release_candidate=${Boolean(releaseCandidate)}`);
-  const { createPayload, deletedOldestVersion } = await createReUploadWithCapHandling(session, {
+  const { createPayload, deletedVersion } = await createReUploadWithCapHandling(session, {
     assetId: asset.id,
     metadata: preparedMetadata,
     chunkPlan,
     changelog,
     releaseCandidate,
     deleteOldestVersionWhenCapped,
+    maxPrereleaseVersionsToKeep,
   });
   const versionId = createPayload.version_id;
 
@@ -327,7 +374,8 @@ async function uploadZipVersionHttp(session, options) {
     versionId,
     version: preparedMetadata.version,
     releaseCandidate: Boolean(releaseCandidate),
-    deletedOldestVersion,
+    deletedVersion,
+    deletedOldestVersion: deletedVersion,
     finalAsset,
   };
 }
@@ -338,5 +386,6 @@ module.exports = {
   MAX_VERSIONS_ERROR_CODE,
   MAX_VERSIONS_MESSAGE,
   splitIntoChunks,
+  resolveVersionToDeleteForCap,
   uploadZipVersionHttp,
 };

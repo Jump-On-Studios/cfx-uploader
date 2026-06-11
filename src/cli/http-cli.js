@@ -10,6 +10,7 @@ const {
   parseHeadlessFromArgs,
   parseReleaseCandidateFromArgs,
   parseDeleteOldestVersionWhenCappedFromArgs,
+  parseMaxPrereleaseVersionsToKeepFromArgs,
 } = require('../utils/args');
 const { loadProjectEnv } = require('../utils/runtime-env');
 
@@ -21,6 +22,7 @@ async function runHttpCli(args = process.argv.slice(2)) {
   const repository = resolveGithubRepository(fallbackConfig);
   const releaseCandidate = parseReleaseCandidateFromArgs(args);
   const deleteOldestVersionWhenCapped = parseDeleteOldestVersionWhenCappedFromArgs(args);
+  const maxPrereleaseVersionsToKeep = parseMaxPrereleaseVersionsToKeepFromArgs(args);
   const passkey = await resolvePasskeyCredential({ projectRoot });
 
   return runHttpUploadFlow({
@@ -34,6 +36,7 @@ async function runHttpCli(args = process.argv.slice(2)) {
     headless: parseHeadlessFromArgs(args),
     releaseCandidate,
     deleteOldestVersionWhenCapped,
+    maxPrereleaseVersionsToKeep,
   });
 }
 

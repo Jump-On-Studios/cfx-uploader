@@ -19,6 +19,7 @@ const { authenticateToCfx } = require('../auth/cfx-auth');
 const { createCfxHttpSession } = require('../cfx/http-session');
 const { findAssetByExactName, getAssetDetails } = require('../cfx/http-assets');
 const { uploadZipVersionHttp } = require('../cfx/http-upload');
+const { normalizeMaxPrereleaseVersionsToKeep } = require('../utils/prerelease-retention');
 
 async function runHttpUploadFlow(options) {
   const {
@@ -32,6 +33,7 @@ async function runHttpUploadFlow(options) {
     headless = true,
     releaseCandidate,
     deleteOldestVersionWhenCapped,
+    maxPrereleaseVersionsToKeep,
     changelog = null,
     releasesDir = path.join(projectRoot, 'releases'),
     tempExtractDir = path.join(releasesDir, '.tmp-extract'),
@@ -82,11 +84,17 @@ async function runHttpUploadFlow(options) {
     const resolvedDeleteOldestVersionWhenCapped = typeof deleteOldestVersionWhenCapped === 'boolean'
       ? deleteOldestVersionWhenCapped
       : Boolean(config.deleteOldestVersionWhenCapped);
+    const resolvedMaxPrereleaseVersionsToKeep = maxPrereleaseVersionsToKeep !== undefined
+      ? normalizeMaxPrereleaseVersionsToKeep(maxPrereleaseVersionsToKeep)
+      : config.maxPrereleaseVersionsToKeep;
     log(`Config source: ${config.configPath || config.configSource}`);
     log(`Portal asset: ${config.portalName}`, { portalName: config.portalName });
     log(`Folders to ZIP: ${config.foldersToZip.join(', ')}`, { foldersToZip: config.foldersToZip });
     log(`Delete oldest version when capped: ${resolvedDeleteOldestVersionWhenCapped}`, {
       deleteOldestVersionWhenCapped: resolvedDeleteOldestVersionWhenCapped,
+    });
+    log(`Max prerelease versions to keep: ${resolvedMaxPrereleaseVersionsToKeep === null ? 'disabled' : resolvedMaxPrereleaseVersionsToKeep}`, {
+      maxPrereleaseVersionsToKeep: resolvedMaxPrereleaseVersionsToKeep,
     });
 
     createdZipPath = await createFilteredZip({
@@ -135,6 +143,7 @@ async function runHttpUploadFlow(options) {
       changelog: changelog ?? releaseInfo.body,
       releaseCandidate: resolvedReleaseCandidate,
       deleteOldestVersionWhenCapped: resolvedDeleteOldestVersionWhenCapped,
+      maxPrereleaseVersionsToKeep: resolvedMaxPrereleaseVersionsToKeep,
     });
 
     log(`HTTP upload complete: asset=${uploadResult.assetId}, version_id=${uploadResult.versionId}, version=${uploadResult.version}`);
@@ -150,6 +159,7 @@ async function runHttpUploadFlow(options) {
       version: uploadResult.version,
       assetId: uploadResult.assetId,
       versionId: uploadResult.versionId,
+      deletedVersion: uploadResult.deletedVersion,
       deletedOldestVersion: uploadResult.deletedOldestVersion,
       finalAsset: uploadResult.finalAsset,
     };

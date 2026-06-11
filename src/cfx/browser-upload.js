@@ -343,6 +343,7 @@ async function deleteOldestVisibleVersionFromModal(page) {
       return {
         clicked: true,
         version: extractVersion(target.text),
+        releaseCandidate: target.text.toLowerCase().includes('release candidate'),
         rowText: target.text,
       };
     }, TRASH_ICON_PATH_PREFIX)
@@ -426,7 +427,11 @@ async function deleteOldestVisibleVersionFromModal(page) {
     throw new Error(`Timed out waiting for UPLOAD NEW VERSION to become enabled after deletion. Modal text: ${modalText || error.message}`);
   });
   await sleep(3000);
-  return deletionTarget;
+  return {
+    version: deletionTarget.version,
+    releaseCandidate: Boolean(deletionTarget.releaseCandidate),
+    reason: 'asset-version-cap',
+  };
 }
 
 async function handleCappedUploadModalIfNeeded(page, options = {}) {
@@ -499,11 +504,12 @@ async function handleCappedUploadModalIfNeeded(page, options = {}) {
   const deletedVersion = await deleteOldestVisibleVersionFromModal(page);
   console.log(`Deleted oldest CFX version in browser flow before retry: version=${deletedVersion.version}`);
 
-  return true;
+  return deletedVersion;
 }
 
 async function clickUploadNewVersionButton(page, options = {}) {
   const { deleteOldestVersionWhenCapped = false } = options;
+  let deletedVersion = null;
   const found = await retryOnNavigationContext(() =>
     page.waitForFunction(() => {
       const buttons = document.querySelectorAll('button');
@@ -531,7 +537,7 @@ async function clickUploadNewVersionButton(page, options = {}) {
         throw new Error(`${MAX_VERSIONS_MESSAGE} Modal text: ${buttonState.text}`);
       }
 
-      const deletedVersion = await deleteOldestVisibleVersionFromModal(page);
+      deletedVersion = await deleteOldestVisibleVersionFromModal(page);
       console.log(`Deleted oldest CFX version in browser flow before retry: version=${deletedVersion.version}`);
     } else {
       throw new Error('UPLOAD NEW VERSION button not found after selecting asset.');
@@ -572,7 +578,7 @@ async function clickUploadNewVersionButton(page, options = {}) {
       .catch(() => false);
 
     if (modalOpened) {
-      return;
+      return deletedVersion;
     }
 
     await sleep(600);
@@ -883,7 +889,7 @@ async function waitForUploadSettled(options) {
 /**
  * Full upload flow once user is authenticated and on the Created Assets page.
  * @param {{ page: import('puppeteer').Page, portalName: string, zipPath: string, releaseNotes?: string, releaseCandidate?: boolean, deleteOldestVersionWhenCapped?: boolean }} options
- * @returns {Promise<void>}
+ * @returns {Promise<{ deletedVersion: object | null, deletedOldestVersion: object | null }>}
  */
 async function uploadZipToCfxAsset(options) {
   const {
@@ -897,9 +903,10 @@ async function uploadZipToCfxAsset(options) {
 
   await filterByAssetName({ page, assetName: portalName });
   await selectAssetByName({ page, assetName: portalName });
-  await clickUploadNewVersionButton(page, { deleteOldestVersionWhenCapped });
+  let deletedVersion = await clickUploadNewVersionButton(page, { deleteOldestVersionWhenCapped });
   const cappedModalHandled = await handleCappedUploadModalIfNeeded(page, { deleteOldestVersionWhenCapped });
   if (cappedModalHandled) {
+    deletedVersion = cappedModalHandled;
     await clickUploadNewVersionButton(page, { deleteOldestVersionWhenCapped });
   }
   await selectReleaseTypeInModal({ page, releaseCandidate });
@@ -908,6 +915,11 @@ async function uploadZipToCfxAsset(options) {
   await fillReleaseNotes({ page, releaseNotes });
   await clickModalUploadButton(page);
   await waitForUploadSettled({ page, assetName: portalName });
+
+  return {
+    deletedVersion,
+    deletedOldestVersion: deletedVersion,
+  };
 }
 
 module.exports = {

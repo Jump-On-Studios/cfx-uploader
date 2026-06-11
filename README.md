@@ -122,7 +122,8 @@ Each uploaded resource repository must contain `cfx_uploader.json` at its root:
 {
   "portalName": "Clothingstore",
   "foldersToZip": ["jo_clothingstore"],
-  "deleteOldestVersionWhenCapped": false
+  "deleteOldestVersionWhenCapped": false,
+  "maxPrereleaseVersionsToKeep": null
 }
 ```
 
@@ -133,6 +134,7 @@ Fields:
 | `portalName` | yes | Exact CFX Portal asset name. |
 | `foldersToZip` | yes | Folders from the GitHub release source ZIP to include in the final upload ZIP. |
 | `deleteOldestVersionWhenCapped` | no | Destructive opt-in. When `true`, CFX Uploader may delete the oldest CFX asset version if the asset has reached the 5-version limit. |
+| `maxPrereleaseVersionsToKeep` | no | Optional HTTP retention policy for prerelease versions. `null` or omitted keeps the default oldest-version deletion behavior. Values above `4` are capped to `4`. |
 
 `githubRepository` is not part of `cfx_uploader.json`. It is provided by the library call, CLI env, or GitHub Actions runtime.
 
@@ -201,6 +203,7 @@ await uploader.upload({
 | `workDir` | no | Working directory for temporary files. Defaults to an OS temp folder. |
 | `releaseCandidate` | no | Overrides GitHub pre-release detection. |
 | `deleteOldestVersionWhenCapped` | no | Overrides the project JSON capped-version behavior. |
+| `maxPrereleaseVersionsToKeep` | no | Overrides the project JSON prerelease retention policy. Use `null` to delete the oldest version regardless of type. Values above `4` are capped to `4`. |
 | `changelog` | no | CFX release notes. Defaults to the GitHub release body. |
 | `onLog` | no | Custom logger callback. Defaults to `console.log`. |
 
@@ -220,11 +223,26 @@ The library returns a structured result on success:
   version,
   assetId,
   versionId,
+  deletedVersion,
   deletedOldestVersion
 }
 ```
 
-`deletedOldestVersion` is `null` unless `deleteOldestVersionWhenCapped` was enabled and CFX Uploader had to delete a capped asset version before retrying the upload.
+`deletedVersion` is `null` unless `deleteOldestVersionWhenCapped` was enabled and CFX Uploader had to delete a capped asset version before retrying the upload.
+
+When present:
+
+```js
+{
+  id,
+  version,
+  created_at,
+  releaseCandidate,
+  reason: 'asset-version-cap'
+}
+```
+
+`deletedOldestVersion` is kept as a backward-compatible alias. New integrations should use `deletedVersion`.
 
 The package also exports lower-level helpers:
 
@@ -296,6 +314,8 @@ Control capped-version cleanup:
 ```bash
 npx cfx-uploader-http --delete-oldest-version-when-capped
 npx cfx-uploader-http --no-delete-oldest-version-when-capped
+npx cfx-uploader-http --max-prerelease-versions-to-keep=2
+npx cfx-uploader-http --no-prerelease-retention
 ```
 
 ### Browser Mode
@@ -314,6 +334,8 @@ npx cfx-uploader-browser --release-candidate
 npx cfx-uploader-browser --full-release
 npx cfx-uploader-browser --delete-oldest-version-when-capped
 npx cfx-uploader-browser --no-delete-oldest-version-when-capped
+npx cfx-uploader-browser --max-prerelease-versions-to-keep=2
+npx cfx-uploader-browser --no-prerelease-retention
 ```
 
 ## Release Types
@@ -371,7 +393,8 @@ You can opt in to automatic cleanup from `cfx_uploader.json`:
 {
   "portalName": "CFX Uploader Test",
   "foldersToZip": ["cfx_uploader_test"],
-  "deleteOldestVersionWhenCapped": true
+  "deleteOldestVersionWhenCapped": true,
+  "maxPrereleaseVersionsToKeep": 2
 }
 ```
 
@@ -384,6 +407,7 @@ await upload({
   githubToken,
   passkey,
   deleteOldestVersionWhenCapped: true,
+  maxPrereleaseVersionsToKeep: 2,
 });
 ```
 
@@ -395,6 +419,16 @@ When enabled, CFX Uploader:
 4. deletes the version with the oldest `created_at`;
 5. waits until the asset is below the limit;
 6. retries version creation once.
+
+By default, `maxPrereleaseVersionsToKeep` is `null`, which means CFX Uploader deletes the oldest version regardless of type. When a number is configured, HTTP mode applies prerelease-aware retention:
+
+- new prerelease: delete the oldest prerelease if the current prerelease count is already at the limit, otherwise delete the oldest stable version;
+- new stable release: delete the oldest stable version when possible;
+- if the preferred group is empty, delete the oldest available version.
+
+`maxPrereleaseVersionsToKeep` is capped at `4`, even if a higher value is provided. This keeps at least one slot available for a full release on a 5-version CFX asset.
+
+Browser mode still handles capped assets, but prerelease-aware retention is only guaranteed in HTTP mode because the CFX UI does not expose reliable version metadata.
 
 This is intentionally destructive. Use it only for assets where deleting the oldest CFX version is acceptable.
 
@@ -461,6 +495,7 @@ Common errors:
 | Project config | `Invalid cfx_uploader.json: portalName...` | `portalName` is missing or invalid. |
 | Project config | `Invalid cfx_uploader.json: foldersToZip...` | `foldersToZip` is missing or invalid. |
 | Project config | `Invalid cfx_uploader.json: deleteOldestVersionWhenCapped...` | The capped-version option is not a boolean. |
+| Project config | `Invalid cfx_uploader.json: maxPrereleaseVersionsToKeep...` | The prerelease retention option is not `null` or an integer `>= 0`. Values above `4` are accepted and capped. |
 | ZIP workflow | `Folder "..." not found in unzipped release...` | A folder listed in `foldersToZip` does not exist in the release archive. |
 | ZIP workflow | `Path "..." is not a directory.` | A configured upload path exists but is not a directory. |
 | ZIP metadata | `ZIP metadata missing: no fxmanifest.lua found...` | The final ZIP does not contain an `fxmanifest.lua`. |

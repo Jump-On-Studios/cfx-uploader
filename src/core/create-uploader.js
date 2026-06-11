@@ -6,6 +6,7 @@ const {
   parsePasskeyCredentialJson,
   validatePasskeyCredential,
 } = require('../auth/passkey-credential');
+const { normalizeMaxPrereleaseVersionsToKeep } = require('../utils/prerelease-retention');
 
 function resolveLibraryPasskey(options) {
   if (options.passkey) {
@@ -45,6 +46,12 @@ function validateUploadOptions(options) {
   ) {
     throw new Error('Upload option "deleteOldestVersionWhenCapped" must be a boolean when provided.');
   }
+
+  try {
+    normalizeMaxPrereleaseVersionsToKeep(options.maxPrereleaseVersionsToKeep, 'Upload option "maxPrereleaseVersionsToKeep"');
+  } catch (error) {
+    throw new Error(error.message);
+  }
 }
 
 async function upload(options = {}) {
@@ -65,6 +72,7 @@ async function upload(options = {}) {
     headless: options.headless !== false,
     releaseCandidate: options.releaseCandidate,
     deleteOldestVersionWhenCapped: options.deleteOldestVersionWhenCapped,
+    maxPrereleaseVersionsToKeep: normalizeMaxPrereleaseVersionsToKeep(options.maxPrereleaseVersionsToKeep),
     changelog: options.changelog ?? null,
     releasesDir: path.join(workDir, 'releases'),
     onLog,

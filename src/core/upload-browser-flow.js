@@ -17,6 +17,7 @@ const { readCfxUploaderConfig } = require('../config/cfx-uploader-config');
 const { readZipMetadata } = require('../zip/zip-metadata');
 const { authenticateToCfx } = require('../auth/cfx-auth');
 const { uploadZipToCfxAsset } = require('../cfx/browser-upload');
+const { normalizeMaxPrereleaseVersionsToKeep } = require('../utils/prerelease-retention');
 
 async function runBrowserUploadFlow(options) {
   const {
@@ -30,6 +31,7 @@ async function runBrowserUploadFlow(options) {
     headless = true,
     releaseCandidate,
     deleteOldestVersionWhenCapped,
+    maxPrereleaseVersionsToKeep,
     releasesDir = path.join(projectRoot, 'releases'),
     tempExtractDir = path.join(releasesDir, '.tmp-extract'),
   } = options;
@@ -76,10 +78,14 @@ async function runBrowserUploadFlow(options) {
     const resolvedDeleteOldestVersionWhenCapped = typeof deleteOldestVersionWhenCapped === 'boolean'
       ? deleteOldestVersionWhenCapped
       : Boolean(config.deleteOldestVersionWhenCapped);
+    const resolvedMaxPrereleaseVersionsToKeep = maxPrereleaseVersionsToKeep !== undefined
+      ? normalizeMaxPrereleaseVersionsToKeep(maxPrereleaseVersionsToKeep)
+      : config.maxPrereleaseVersionsToKeep;
     console.log(`Config source: ${config.configPath || config.configSource}`);
     console.log(`Portal asset: ${config.portalName}`);
     console.log(`Folders to ZIP: ${config.foldersToZip.join(', ')}`);
     console.log(`Delete oldest version when capped: ${resolvedDeleteOldestVersionWhenCapped}`);
+    console.log(`Max prerelease versions to keep: ${resolvedMaxPrereleaseVersionsToKeep === null ? 'disabled' : resolvedMaxPrereleaseVersionsToKeep}`);
 
     createdZipPath = await createFilteredZip({
       unzippedRootPath,
@@ -110,17 +116,30 @@ async function runBrowserUploadFlow(options) {
     browser = authContext.browser;
 
     console.log('Step 5/5: Uploading filtered ZIP to CFX asset...');
-    await uploadZipToCfxAsset({
+    const uploadResult = await uploadZipToCfxAsset({
       page: authContext.page,
       portalName: config.portalName,
       zipPath: createdZipPath,
       releaseCandidate: resolvedReleaseCandidate,
       deleteOldestVersionWhenCapped: resolvedDeleteOldestVersionWhenCapped,
+      maxPrereleaseVersionsToKeep: resolvedMaxPrereleaseVersionsToKeep,
     });
 
     await new Promise((resolve) => setTimeout(resolve, 8000));
 
     console.log('Orchestration completed successfully.');
+    return {
+      success: true,
+      mode: 'browser',
+      repository,
+      releaseTag,
+      resolvedReleaseTag: releaseInfo.version,
+      releaseCandidate: resolvedReleaseCandidate,
+      portalName: config.portalName,
+      version: metadata.version,
+      deletedVersion: uploadResult.deletedVersion,
+      deletedOldestVersion: uploadResult.deletedOldestVersion,
+    };
   } finally {
     await cleanupTempExtractDir(tempExtractDir);
     await cleanupFile(downloadedZipPath, console.log);

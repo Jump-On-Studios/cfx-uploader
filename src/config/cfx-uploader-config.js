@@ -4,6 +4,7 @@
  */
 const fs = require('fs/promises');
 const path = require('path');
+const { normalizeMaxPrereleaseVersionsToKeep } = require('../utils/prerelease-retention');
 
 const CONFIG_FILE_NAME = 'cfx_uploader.json';
 
@@ -50,11 +51,20 @@ function normalizeConfig(rawConfig, githubRepository, sourcePath) {
     throw new Error(`Invalid ${CONFIG_FILE_NAME}: deleteOldestVersionWhenCapped must be a boolean when provided.`);
   }
 
+  const maxPrereleaseVersionsToKeep = (() => {
+    try {
+      return normalizeMaxPrereleaseVersionsToKeep(rawConfig.maxPrereleaseVersionsToKeep);
+    } catch (error) {
+      throw new Error(`Invalid ${CONFIG_FILE_NAME}: ${error.message}`);
+    }
+  })();
+
   return {
     githubRepository,
     portalName,
     foldersToZip,
     deleteOldestVersionWhenCapped: Boolean(rawConfig.deleteOldestVersionWhenCapped),
+    maxPrereleaseVersionsToKeep,
     configPath: sourcePath,
     configSource: sourcePath ? CONFIG_FILE_NAME : 'mock-config.js',
   };
