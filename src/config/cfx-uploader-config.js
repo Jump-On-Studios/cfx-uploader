@@ -70,7 +70,12 @@ function normalizeConfig(rawConfig, githubRepository, sourcePath) {
   };
 }
 
-async function readCfxUploaderConfig(unzippedRootPath, githubRepository, fallbackConfig = {}) {
+async function readCfxUploaderConfig(
+  unzippedRootPath,
+  githubRepository,
+  fallbackConfig = {},
+  { allowFallbackConfig = !isGitHubActions() } = {},
+) {
   const configPath = path.join(unzippedRootPath, CONFIG_FILE_NAME);
 
   try {
@@ -89,7 +94,7 @@ async function readCfxUploaderConfig(unzippedRootPath, githubRepository, fallbac
       throw error;
     }
 
-    if (isGitHubActions()) {
+    if (!allowFallbackConfig || isGitHubActions()) {
       throw new Error(`Missing ${CONFIG_FILE_NAME} at repository root: ${configPath}`);
     }
 

@@ -161,6 +161,8 @@ Fields:
 
 `githubRepository` is not part of `cfx_uploader.json`. It is provided by the library call, CLI env, or GitHub Actions runtime.
 
+Library mode is strict: if `cfx_uploader.json` is missing from the downloaded release, upload fails with `Missing cfx_uploader.json at repository root...`. The `mock-config.js` fallback is only for local CLI development.
+
 ## Library Usage
 
 ### `upload()`

@@ -28,6 +28,7 @@ async function runBrowserUploadFlow(options) {
     passkey,
     passkeySource,
     fallbackConfig = {},
+    allowFallbackConfig = false,
     headless = true,
     releaseCandidate,
     deleteOldestVersionWhenCapped,
@@ -74,7 +75,12 @@ async function runBrowserUploadFlow(options) {
       tempExtractDir,
     });
     const topLevelFolders = await listTopLevelFolders(unzippedRootPath);
-    const config = await readCfxUploaderConfig(unzippedRootPath, repository, fallbackConfig);
+    const config = await readCfxUploaderConfig(
+      unzippedRootPath,
+      repository,
+      fallbackConfig,
+      { allowFallbackConfig },
+    );
     const resolvedDeleteOldestVersionWhenCapped = typeof deleteOldestVersionWhenCapped === 'boolean'
       ? deleteOldestVersionWhenCapped
       : Boolean(config.deleteOldestVersionWhenCapped);

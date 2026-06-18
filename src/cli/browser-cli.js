@@ -33,6 +33,7 @@ async function runBrowserCli(args = process.argv.slice(2)) {
     passkey: passkey.credential,
     passkeySource: passkey.source,
     fallbackConfig,
+    allowFallbackConfig: true,
     headless: parseHeadlessFromArgs(args),
     releaseCandidate,
     deleteOldestVersionWhenCapped,
