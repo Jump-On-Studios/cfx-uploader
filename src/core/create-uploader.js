@@ -25,8 +25,8 @@ function validatePasswordAuth(auth) {
     throw new Error('Upload auth.method must be "password" when auth is provided.');
   }
 
-  if (!auth.username || typeof auth.username !== 'string') {
-    throw new Error('Upload auth.username is required for password authentication.');
+  if (!auth.email || typeof auth.email !== 'string') {
+    throw new Error('Upload auth.email is required for password authentication.');
   }
 
   if (!auth.password || typeof auth.password !== 'string') {

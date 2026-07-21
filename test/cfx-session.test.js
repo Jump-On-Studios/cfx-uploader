@@ -66,7 +66,7 @@ test('invalidates an expired cache and attempts exactly one fresh authentication
         sessionEncryptionKey: 'cache-key',
         auth: {
           method: 'password',
-          username: 'test-user',
+          email: 'test@example.test',
           password: 'test-password',
           twoFactorCodeProvider: async () => '123456',
         },

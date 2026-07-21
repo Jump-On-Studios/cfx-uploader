@@ -48,10 +48,10 @@ test('times out a 2FA provider without exposing its value', async () => {
 
 test('requires a password and a 2FA provider', () => {
   assert.throws(() => validatePasswordAuth(null), /requires an auth object/);
-  assert.throws(() => validatePasswordAuth({ method: 'password' }), /auth.username/);
-  assert.throws(() => validatePasswordAuth({ method: 'password', username: 'user' }), /auth.password/);
+  assert.throws(() => validatePasswordAuth({ method: 'password' }), /auth.email/);
+  assert.throws(() => validatePasswordAuth({ method: 'password', email: 'user@example.test' }), /auth.password/);
   assert.throws(
-    () => validatePasswordAuth({ method: 'password', username: 'user', password: 'password' }),
+    () => validatePasswordAuth({ method: 'password', email: 'user@example.test', password: 'password' }),
     /twoFactorCodeProvider/,
   );
 });
@@ -119,7 +119,7 @@ test('drives the visible password and composite 2FA fields', async () => {
     page,
     portalUrl: 'https://portal.cfx.re/assets/created-assets',
     auth: {
-      username: 'test-user',
+      email: 'test@example.test',
       password: 'test-password',
       twoFactorCodeProvider: async ({ attempt, timeoutMs }) => {
         providerCalls += 1;
@@ -133,5 +133,5 @@ test('drives the visible password and composite 2FA fields', async () => {
   });
 
   assert.equal(providerCalls, 1);
-  assert.deepEqual(typed, ['test-user', 'test-password', '123456']);
+  assert.deepEqual(typed, ['test@example.test', 'test-password', '123456']);
 });

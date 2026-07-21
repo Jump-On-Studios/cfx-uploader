@@ -96,7 +96,7 @@ await upload({
   githubToken: process.env.GITHUB_TOKEN,
   auth: {
     method: 'password',
-    username: process.env.CFX_UPLOADER_EMAIL,
+    email: process.env.CFX_UPLOADER_EMAIL,
     password: process.env.CFX_UPLOADER_PASSWORD,
     twoFactorCodeProvider: async ({ attempt, timeoutMs }) => {
       console.log(`Waiting for CFX 2FA code (attempt ${attempt}, ${timeoutMs}ms timeout)`);
@@ -292,7 +292,7 @@ export async function handleGithubReleaseWebhook(payload) {
 | `githubToken` | yes | GitHub token used to read releases and download archives. |
 | `passkey` | conditional | Passkey credential object for the default/passkey mode. Not needed with `auth.method: 'password'`. |
 | `passkeyJson` | no | Alternative JSON string form of the passkey credential. |
-| `auth` | no | Password authentication object with `method`, `username`, `password`, and `twoFactorCodeProvider`. |
+| `auth` | no | Password authentication object with `method`, `email`, `password`, and `twoFactorCodeProvider`. |
 | `headless` | no | Browser auth mode. Defaults to `true`. |
 | `workDir` | no | Working directory for temporary files. Defaults to an OS temp folder. |
 | `sessionCachePath` | no | Explicit path for the encrypted CFX session cache. No cache is used when omitted. |

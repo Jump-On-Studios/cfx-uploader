@@ -284,8 +284,8 @@ function validatePasswordAuth(auth) {
     throw new Error('Password authentication requires an auth object.');
   }
 
-  if (!auth.username || typeof auth.username !== 'string') {
-    throw new Error('Password authentication requires auth.username.');
+  if (!auth.email || typeof auth.email !== 'string') {
+    throw new Error('Password authentication requires auth.email.');
   }
 
   if (!auth.password || typeof auth.password !== 'string') {
@@ -357,7 +357,7 @@ async function authenticateWithPassword(options) {
 
   await clickPortalLoginButton(page);
   await waitForVisibleSelector(page, '#login-account-name', authTimeoutMs);
-  await fillVisibleInput(page, '#login-account-name', auth.username);
+  await fillVisibleInput(page, '#login-account-name', auth.email);
   await fillVisibleInput(page, '#login-account-password', auth.password);
 
   const loginNavigation = page.waitForNavigation({ waitUntil: 'load', timeout: authTimeoutMs }).catch(() => null);

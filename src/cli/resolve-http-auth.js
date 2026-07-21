@@ -29,7 +29,7 @@ async function resolveHttpCliAuth({ args, projectRoot }) {
     return {
       auth: {
         method: 'password',
-        username: process.env.CFX_UPLOADER_EMAIL,
+        email: process.env.CFX_UPLOADER_EMAIL,
         password: process.env.CFX_UPLOADER_PASSWORD,
         twoFactorCodeProvider: createConsoleTwoFactorCodeProvider(),
       },
