@@ -1,0 +1,18 @@
+const assert = require('node:assert/strict');
+const test = require('node:test');
+
+const { resolveTwoFactorTimeoutMs } = require('../src/cli/http-cli');
+const { resolveHttpAuthMethod } = require('../src/cli/resolve-http-auth');
+
+test('selects password or passkey explicitly for the HTTP CLI', () => {
+  assert.equal(resolveHttpAuthMethod(['--auth-method=password']), 'password');
+  assert.equal(resolveHttpAuthMethod(['--auth-method=passkey']), 'passkey');
+  assert.throws(() => resolveHttpAuthMethod(['--auth-method=unknown']), /Expected passkey or password/);
+});
+
+test('validates the CLI 2FA timeout', () => {
+  assert.equal(resolveTwoFactorTimeoutMs(undefined), undefined);
+  assert.equal(resolveTwoFactorTimeoutMs('600000'), 600000);
+  assert.throws(() => resolveTwoFactorTimeoutMs('not-a-number'), /positive integer/);
+  assert.throws(() => resolveTwoFactorTimeoutMs('0'), /positive integer/);
+});

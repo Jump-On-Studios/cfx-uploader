@@ -25,6 +25,20 @@ function parseHeadlessFromArgs(args = process.argv.slice(2)) {
   return true;
 }
 
+function parseAuthMethodFromArgs(args = process.argv.slice(2)) {
+  const explicitArg = args.find((arg) => arg.startsWith('--auth-method='));
+  if (!explicitArg) {
+    return undefined;
+  }
+
+  const value = explicitArg.split('=').slice(1).join('=').trim().toLowerCase();
+  if (value !== 'passkey' && value !== 'password') {
+    throw new Error(`Invalid value for --auth-method: ${value}. Expected passkey or password.`);
+  }
+
+  return value;
+}
+
 function parseReleaseCandidateFromArgs(args = process.argv.slice(2)) {
   const releaseCandidate = args.includes('--release-candidate');
   const fullRelease = args.includes('--full-release');
@@ -91,6 +105,7 @@ function parseMaxPrereleaseVersionsToKeepFromArgs(args = process.argv.slice(2)) 
 }
 
 module.exports = {
+  parseAuthMethodFromArgs,
   parseHeadlessFromArgs,
   parseReleaseCandidateFromArgs,
   parseDeleteOldestVersionWhenCappedFromArgs,

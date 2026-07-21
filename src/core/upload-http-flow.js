@@ -15,8 +15,7 @@ const {
 } = require('../zip/zip-workflow');
 const { readCfxUploaderConfig } = require('../config/cfx-uploader-config');
 const { readZipMetadata } = require('../zip/zip-metadata');
-const { authenticateToCfx } = require('../auth/cfx-auth');
-const { createCfxHttpSession } = require('../cfx/http-session');
+const { resolveCfxHttpSession } = require('../auth/cfx-session');
 const { findAssetByExactName, getAssetDetails } = require('../cfx/http-assets');
 const { uploadZipVersionHttp } = require('../cfx/http-upload');
 const { normalizeMaxPrereleaseVersionsToKeep } = require('../utils/prerelease-retention');
@@ -27,6 +26,7 @@ async function runHttpUploadFlow(options) {
     repository,
     releaseTag = null,
     githubToken,
+    auth,
     passkey,
     passkeySource,
     fallbackConfig = {},
@@ -36,6 +36,10 @@ async function runHttpUploadFlow(options) {
     deleteOldestVersionWhenCapped,
     maxPrereleaseVersionsToKeep,
     changelog = null,
+    sessionCachePath = null,
+    sessionEncryptionKey = null,
+    authTimeoutMs,
+    twoFactorTimeoutMs,
     releasesDir = path.join(projectRoot, 'releases'),
     tempExtractDir = path.join(releasesDir, '.tmp-extract'),
     onLog = (message) => console.log(message),
@@ -63,7 +67,6 @@ async function runHttpUploadFlow(options) {
 
   let downloadedZipPath = null;
   let createdZipPath = null;
-  let browser = null;
 
   try {
     log('=== CFX Uploader HTTP Orchestrator ===');
@@ -206,18 +209,34 @@ async function runHttpUploadFlow(options) {
       label: 'Authenticating with CFX',
       index: 5,
       total: 6,
-      meta: { headless },
+      meta: { headless, authMethod: auth?.method || (passkey ? 'passkey' : 'cached') },
     });
-    log('\nStep 5/6: Authenticating with CFX in browser');
+    log('\nStep 5/6: Resolving authenticated CFX session');
     if (passkeySource) {
       log(`Passkey source: ${passkeySource}`);
     }
-    const authResult = await authenticateToCfx({
+    const sessionResult = await resolveCfxHttpSession({
       headless,
+      auth,
       credential: passkey,
+      sessionCachePath,
+      sessionEncryptionKey,
+      authTimeoutMs,
+      twoFactorTimeoutMs,
     });
-    browser = authResult.browser;
-    const session = await createCfxHttpSession(authResult.page);
+    const session = sessionResult.session;
+    log(`CFX authentication method: ${sessionResult.authMethod}`, { authMethod: sessionResult.authMethod });
+    log(`CFX session reused: ${sessionResult.sessionReused}`, { sessionReused: sessionResult.sessionReused });
+    await progress({
+      step: 'authenticate-cfx',
+      label: sessionResult.sessionReused ? 'Reused authenticated CFX session' : 'Authenticated CFX session ready',
+      index: 5,
+      total: 6,
+      meta: {
+        authMethod: sessionResult.authMethod,
+        sessionReused: sessionResult.sessionReused,
+      },
+    });
 
     await progress({
       step: 'upload-cfx',
@@ -283,6 +302,8 @@ async function runHttpUploadFlow(options) {
       releaseTag,
       resolvedReleaseTag: releaseInfo.version,
       releaseCandidate: resolvedReleaseCandidate,
+      authMethod: sessionResult.authMethod,
+      sessionReused: sessionResult.sessionReused,
       portalName: config.portalName,
       version: uploadResult.version,
       assetId: uploadResult.assetId,
@@ -296,9 +317,6 @@ async function runHttpUploadFlow(options) {
     await cleanupFile(downloadedZipPath, log);
     await cleanupFile(createdZipPath, log);
 
-    if (browser) {
-      await browser.close();
-    }
   }
 }
 

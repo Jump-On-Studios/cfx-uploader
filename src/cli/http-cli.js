@@ -3,9 +3,9 @@ const path = require('path');
 
 const mockConfig = require('../config/mock-config');
 const { resolveGithubRepository } = require('../config/cfx-uploader-config');
-const { resolvePasskeyCredential } = require('../auth/passkey-credential');
 const { resolveReleaseTag } = require('../github/release-download');
 const { runHttpUploadFlow } = require('../core/upload-http-flow');
+const { resolveHttpCliAuth } = require('./resolve-http-auth');
 const {
   parseHeadlessFromArgs,
   parseReleaseCandidateFromArgs,
@@ -13,6 +13,19 @@ const {
   parseMaxPrereleaseVersionsToKeepFromArgs,
 } = require('../utils/args');
 const { loadProjectEnv } = require('../utils/runtime-env');
+
+function resolveTwoFactorTimeoutMs(value) {
+  if (value === undefined || value === null || value === '') {
+    return undefined;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error('CFX_UPLOADER_2FA_TIMEOUT_MS must be a positive integer.');
+  }
+
+  return parsed;
+}
 
 async function runHttpCli(args = process.argv.slice(2)) {
   const projectRoot = path.resolve(__dirname, '..', '..');
@@ -23,21 +36,25 @@ async function runHttpCli(args = process.argv.slice(2)) {
   const releaseCandidate = parseReleaseCandidateFromArgs(args);
   const deleteOldestVersionWhenCapped = parseDeleteOldestVersionWhenCappedFromArgs(args);
   const maxPrereleaseVersionsToKeep = parseMaxPrereleaseVersionsToKeepFromArgs(args);
-  const passkey = await resolvePasskeyCredential({ projectRoot });
+  const authConfig = await resolveHttpCliAuth({ args, projectRoot });
 
   return runHttpUploadFlow({
     projectRoot,
     repository,
     releaseTag: resolveReleaseTag(args),
     githubToken: process.env.GITHUB_TOKEN,
-    passkey: passkey.credential,
-    passkeySource: passkey.source,
+    auth: authConfig.auth,
+    passkey: authConfig.passkey,
+    passkeySource: authConfig.passkeySource,
     fallbackConfig,
     allowFallbackConfig: true,
     headless: parseHeadlessFromArgs(args),
     releaseCandidate,
     deleteOldestVersionWhenCapped,
     maxPrereleaseVersionsToKeep,
+    sessionCachePath: process.env.CFX_UPLOADER_SESSION_CACHE_PATH || null,
+    sessionEncryptionKey: process.env.CFX_UPLOADER_SESSION_KEY || null,
+    twoFactorTimeoutMs: resolveTwoFactorTimeoutMs(process.env.CFX_UPLOADER_2FA_TIMEOUT_MS),
   });
 }
 
@@ -50,5 +67,6 @@ if (require.main === module) {
 }
 
 module.exports = {
+  resolveTwoFactorTimeoutMs,
   runHttpCli,
 };

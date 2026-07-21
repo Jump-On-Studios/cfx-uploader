@@ -17,12 +17,7 @@ function buildCookieHeader(cookies) {
     .join('; ');
 }
 
-async function createCfxHttpSession(page) {
-  const [cookies, userAgent] = await Promise.all([
-    page.cookies(PORTAL_ORIGIN, API_ORIGIN),
-    page.evaluate(() => navigator.userAgent).catch(() => 'Mozilla/5.0'),
-  ]);
-
+function createCfxHttpSessionFromCookies(cookies, userAgent = 'Mozilla/5.0') {
   const cookieHeader = buildCookieHeader(cookies);
 
   if (!cookieHeader) {
@@ -33,6 +28,7 @@ async function createCfxHttpSession(page) {
     apiOrigin: API_ORIGIN,
     portalOrigin: PORTAL_ORIGIN,
     userAgent,
+    cookies,
     baseHeaders: {
       accept: '*/*',
       'cache-control': 'no-cache',
@@ -43,6 +39,15 @@ async function createCfxHttpSession(page) {
       cookie: cookieHeader,
     },
   };
+}
+
+async function createCfxHttpSession(page) {
+  const [cookies, userAgent] = await Promise.all([
+    page.cookies(PORTAL_ORIGIN, API_ORIGIN),
+    page.evaluate(() => navigator.userAgent).catch(() => 'Mozilla/5.0'),
+  ]);
+
+  return createCfxHttpSessionFromCookies(cookies, userAgent);
 }
 
 async function readResponseBody(response) {
@@ -72,7 +77,10 @@ async function cfxFetch(session, pathOrUrl, options = {}) {
 
   if (response.status === 401 || response.status === 403) {
     const body = await readResponseBody(response);
-    throw new Error(`CFX HTTP auth failed (${response.status}): ${body}`);
+    const error = new Error(`CFX HTTP auth failed (${response.status}): ${body}`);
+    error.status = response.status;
+    error.isCfxAuthError = true;
+    throw error;
   }
 
   return response;
@@ -101,7 +109,9 @@ async function cfxJson(session, pathOrUrl, options = {}) {
 module.exports = {
   API_ORIGIN,
   PORTAL_ORIGIN,
+  buildCookieHeader,
   createCfxHttpSession,
+  createCfxHttpSessionFromCookies,
   cfxFetch,
   cfxJson,
   readResponseBody,

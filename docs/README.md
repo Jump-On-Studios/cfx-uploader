@@ -6,6 +6,7 @@ This directory contains project notes and integration guides that are useful for
 
 - [GitHub Actions workflow](github-actions-workflow.md): future CI workflow for product repositories.
 - [Nuxt library integration plan](nuxt-library-plan.md): server-side webhook integration strategy.
+- [CFX authentication exploration](cfx-auth-exploration.md): username/password, 2FA, and SSO flow notes.
 - [CFX Portal UI exploration](cfx-portal-exploration.md): DOM, modal, endpoint, and UI behavior notes from CFX Portal exploration.
 - [Session notes](session-notes.md): historical implementation notes from the automation update sessions.
 

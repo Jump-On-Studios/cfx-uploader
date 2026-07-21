@@ -20,6 +20,24 @@ function resolveLibraryPasskey(options) {
   throw new Error('Missing CFX passkey. Provide passkey or passkeyJson.');
 }
 
+function validatePasswordAuth(auth) {
+  if (!auth || typeof auth !== 'object' || auth.method !== 'password') {
+    throw new Error('Upload auth.method must be "password" when auth is provided.');
+  }
+
+  if (!auth.username || typeof auth.username !== 'string') {
+    throw new Error('Upload auth.username is required for password authentication.');
+  }
+
+  if (!auth.password || typeof auth.password !== 'string') {
+    throw new Error('Upload auth.password is required for password authentication.');
+  }
+
+  if (typeof auth.twoFactorCodeProvider !== 'function') {
+    throw new Error('Upload auth.twoFactorCodeProvider is required for password authentication.');
+  }
+}
+
 function validateUploadOptions(options) {
   if (!options || typeof options !== 'object') {
     throw new Error('Upload options are required.');
@@ -31,6 +49,27 @@ function validateUploadOptions(options) {
 
   if (!options.githubToken || typeof options.githubToken !== 'string') {
     throw new Error('Upload option "githubToken" is required.');
+  }
+
+  if (options.auth !== undefined) {
+    validatePasswordAuth(options.auth);
+  }
+
+  if (options.sessionCachePath !== undefined && options.sessionCachePath !== null) {
+    if (typeof options.sessionCachePath !== 'string' || !options.sessionCachePath.trim()) {
+      throw new Error('Upload option "sessionCachePath" must be a non-empty string when provided.');
+    }
+
+    if (!options.sessionEncryptionKey || typeof options.sessionEncryptionKey !== 'string') {
+      throw new Error('Upload option "sessionEncryptionKey" is required when sessionCachePath is provided.');
+    }
+  }
+
+  if (
+    options.twoFactorTimeoutMs !== undefined &&
+    (!Number.isInteger(options.twoFactorTimeoutMs) || options.twoFactorTimeoutMs <= 0)
+  ) {
+    throw new Error('Upload option "twoFactorTimeoutMs" must be a positive integer when provided.');
   }
 
   if (
@@ -65,7 +104,16 @@ async function upload(options = {}) {
   validateUploadOptions(options);
 
   const workDir = options.workDir || path.join(os.tmpdir(), 'cfx-uploader');
-  const passkey = resolveLibraryPasskey(options);
+  if (options.auth && (options.passkey || options.passkeyJson)) {
+    throw new Error('Provide either auth or passkey/passkeyJson, not both.');
+  }
+
+  let resolvedPasskey = null;
+  if (options.passkey || options.passkeyJson) {
+    resolvedPasskey = resolveLibraryPasskey(options);
+  } else if (!options.auth && !options.sessionCachePath) {
+    resolvedPasskey = resolveLibraryPasskey(options);
+  }
   const onLog = typeof options.onLog === 'function' ? options.onLog : console.log;
   const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
 
@@ -74,7 +122,8 @@ async function upload(options = {}) {
     repository: options.repository,
     releaseTag: options.releaseTag || null,
     githubToken: options.githubToken,
-    passkey,
+    auth: options.auth,
+    passkey: resolvedPasskey,
     passkeySource: options.passkeySource || (options.passkeyJson ? 'passkeyJson' : 'passkey'),
     fallbackConfig: {},
     headless: options.headless !== false,
@@ -82,6 +131,9 @@ async function upload(options = {}) {
     deleteOldestVersionWhenCapped: options.deleteOldestVersionWhenCapped,
     maxPrereleaseVersionsToKeep: normalizeMaxPrereleaseVersionsToKeep(options.maxPrereleaseVersionsToKeep),
     changelog: options.changelog ?? null,
+    sessionCachePath: options.sessionCachePath || null,
+    sessionEncryptionKey: options.sessionEncryptionKey || null,
+    twoFactorTimeoutMs: options.twoFactorTimeoutMs,
     releasesDir: path.join(workDir, 'releases'),
     onLog,
     onProgress,
@@ -103,4 +155,5 @@ module.exports = {
   createUploader,
   upload,
   resolveLibraryPasskey,
+  validatePasswordAuth,
 };
