@@ -106,10 +106,11 @@ await upload({
   sessionCachePath: '/var/lib/cfx-uploader/cfx-session.enc',
   sessionEncryptionKey: process.env.CFX_UPLOADER_SESSION_KEY,
   twoFactorTimeoutMs: 10 * 60 * 1000,
+  emailVerificationTimeoutMs: 10 * 60 * 1000,
 });
 ```
 
-The provider must return exactly six digits. The code is never logged or stored.
+The provider must return exactly six digits. The code is never logged or stored. If CFX requires a new-device email verification, the uploader waits for the email approval and reloads the page until the 2FA screen becomes available.
 
 ## Passkey Setup
 
@@ -298,6 +299,7 @@ export async function handleGithubReleaseWebhook(payload) {
 | `sessionCachePath` | no | Explicit path for the encrypted CFX session cache. No cache is used when omitted. |
 | `sessionEncryptionKey` | no | Secret used to encrypt the session cache. Required with `sessionCachePath`. |
 | `twoFactorTimeoutMs` | no | Maximum time to wait for the 2FA provider. Defaults to 10 minutes. |
+| `emailVerificationTimeoutMs` | no | Maximum time to wait for CFX new-device email verification. Defaults to 10 minutes. |
 | `releaseCandidate` | no | Overrides GitHub pre-release detection. |
 | `deleteOldestVersionWhenCapped` | no | Overrides the project JSON capped-version behavior. |
 | `maxPrereleaseVersionsToKeep` | no | Overrides the project JSON prerelease retention policy. Use `null` to delete the oldest version regardless of type. Values above `4` are capped to `4`. |

@@ -60,6 +60,8 @@ async function resolveCfxHttpSession(options = {}) {
     sessionEncryptionKey,
     authTimeoutMs,
     twoFactorTimeoutMs,
+    emailVerificationTimeoutMs,
+    onLog,
   } = options;
 
   if (sessionCachePath) {
@@ -103,6 +105,8 @@ async function resolveCfxHttpSession(options = {}) {
       portalUrl,
       authTimeoutMs,
       twoFactorTimeoutMs,
+      emailVerificationTimeoutMs,
+      onLog,
     });
 
     if (sessionCachePath) {

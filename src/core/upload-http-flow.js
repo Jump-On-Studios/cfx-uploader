@@ -40,6 +40,7 @@ async function runHttpUploadFlow(options) {
     sessionEncryptionKey = null,
     authTimeoutMs,
     twoFactorTimeoutMs,
+    emailVerificationTimeoutMs,
     releasesDir = path.join(projectRoot, 'releases'),
     tempExtractDir = path.join(releasesDir, '.tmp-extract'),
     onLog = (message) => console.log(message),
@@ -223,6 +224,8 @@ async function runHttpUploadFlow(options) {
       sessionEncryptionKey,
       authTimeoutMs,
       twoFactorTimeoutMs,
+      emailVerificationTimeoutMs,
+      onLog: log,
     });
     const session = sessionResult.session;
     log(`CFX authentication method: ${sessionResult.authMethod}`, { authMethod: sessionResult.authMethod });

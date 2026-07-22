@@ -89,6 +89,13 @@ function validateUploadOptions(options) {
   }
 
   if (
+    options.emailVerificationTimeoutMs !== undefined &&
+    (!Number.isInteger(options.emailVerificationTimeoutMs) || options.emailVerificationTimeoutMs <= 0)
+  ) {
+    throw new Error('Upload option "emailVerificationTimeoutMs" must be a positive integer when provided.');
+  }
+
+  if (
     options.releaseCandidate !== undefined &&
     typeof options.releaseCandidate !== 'boolean'
   ) {
@@ -150,6 +157,7 @@ async function upload(options = {}) {
     sessionCachePath: options.sessionCachePath || null,
     sessionEncryptionKey: options.sessionEncryptionKey || null,
     twoFactorTimeoutMs: options.twoFactorTimeoutMs,
+    emailVerificationTimeoutMs: options.emailVerificationTimeoutMs,
     releasesDir: path.join(workDir, 'releases'),
     onLog,
     onProgress,

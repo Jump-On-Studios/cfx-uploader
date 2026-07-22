@@ -12,6 +12,8 @@ const {
 const DEFAULT_PORTAL_URL = 'https://portal.cfx.re/assets/created-assets';
 const DEFAULT_AUTH_TIMEOUT_MS = 30000;
 const DEFAULT_TWO_FACTOR_TIMEOUT_MS = 10 * 60 * 1000;
+const DEFAULT_EMAIL_VERIFICATION_TIMEOUT_MS = 10 * 60 * 1000;
+const EMAIL_VERIFICATION_POLL_INTERVAL_MS = 2000;
 
 /**
  * Small helper for deterministic waits in SSO transitions.
@@ -208,6 +210,94 @@ async function waitForVisibleSelector(page, selector, timeoutMs = DEFAULT_AUTH_T
   );
 }
 
+async function readPasswordAuthState(page) {
+  return page.evaluate(() => {
+    const isVisible = (selector) => {
+      const element = document.querySelector(selector);
+      if (!element) {
+        return false;
+      }
+
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+    };
+
+    return {
+      hasTwoFactor: isVisible('#login-second-factor'),
+      portalLoaded: Boolean(document.body && document.body.innerText.includes('Created Assets')),
+      pageText: document.body?.innerText || '',
+    };
+  }).catch(() => ({ hasTwoFactor: false, portalLoaded: false, pageText: '' }));
+}
+
+function isEmailVerificationChallengeText(text) {
+  const normalized = String(text || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const mentionsNewLocation = normalized.includes('new device') || normalized.includes('new location');
+  const mentionsEmail = normalized.includes('via email') || normalized.includes('check the email');
+  return mentionsNewLocation && mentionsEmail;
+}
+
+class CfxEmailVerificationTimeoutError extends Error {
+  constructor(timeoutMs) {
+    super(`CFX email verification was not completed within ${Math.ceil(timeoutMs / 60000)} minutes. Approve the CFX email link and retry the upload.`);
+    this.name = 'CfxEmailVerificationTimeoutError';
+    this.code = 'CFX_EMAIL_VERIFICATION_TIMEOUT';
+    this.timeoutMs = timeoutMs;
+  }
+}
+
+async function waitForPasswordAuthStage(options) {
+  const {
+    page,
+    authTimeoutMs = DEFAULT_AUTH_TIMEOUT_MS,
+    emailVerificationTimeoutMs = DEFAULT_EMAIL_VERIFICATION_TIMEOUT_MS,
+    onLog = () => {},
+  } = options;
+  const initialDeadline = Date.now() + authTimeoutMs;
+  let emailVerificationDeadline = null;
+  let challengeLogged = false;
+
+  while (Date.now() < (emailVerificationDeadline || initialDeadline)) {
+    const state = await readPasswordAuthState(page);
+
+    if (state.portalLoaded) {
+      return 'portal';
+    }
+
+    if (state.hasTwoFactor) {
+      if (challengeLogged) {
+        onLog('CFX email verification detected. The 2FA screen is now available.');
+      }
+      return 'two-factor';
+    }
+
+    if (isEmailVerificationChallengeText(state.pageText)) {
+      if (!challengeLogged) {
+        challengeLogged = true;
+        emailVerificationDeadline = Date.now() + emailVerificationTimeoutMs;
+        onLog(`CFX email verification required. Approve the link sent by email; waiting up to ${Math.ceil(emailVerificationTimeoutMs / 60000)} minutes.`);
+      }
+
+      if (Date.now() >= emailVerificationDeadline) {
+        throw new CfxEmailVerificationTimeoutError(emailVerificationTimeoutMs);
+      }
+
+      await page.reload({ waitUntil: 'load' }).catch(() => {});
+      await sleep(EMAIL_VERIFICATION_POLL_INTERVAL_MS);
+      continue;
+    }
+
+    await sleep(250);
+  }
+
+  if (emailVerificationDeadline) {
+    throw new CfxEmailVerificationTimeoutError(emailVerificationTimeoutMs);
+  }
+
+  return null;
+}
+
 async function clickVisibleButtonByText(page, scopeSelector, expectedText) {
   const findButton = ({ selector, text, click }) => {
     const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
@@ -345,6 +435,8 @@ async function authenticateWithPassword(options) {
     auth,
     authTimeoutMs = DEFAULT_AUTH_TIMEOUT_MS,
     twoFactorTimeoutMs = DEFAULT_TWO_FACTOR_TIMEOUT_MS,
+    emailVerificationTimeoutMs = DEFAULT_EMAIL_VERIFICATION_TIMEOUT_MS,
+    onLog = () => {},
   } = options;
 
   validatePasswordAuth(auth);
@@ -364,9 +456,18 @@ async function authenticateWithPassword(options) {
   await clickVisibleButtonByText(page, '#login-form', 'Log In');
   await loginNavigation;
 
-  try {
-    await waitForVisibleSelector(page, '#login-second-factor', authTimeoutMs);
-  } catch (error) {
+  const authStage = await waitForPasswordAuthStage({
+    page,
+    authTimeoutMs,
+    emailVerificationTimeoutMs,
+    onLog,
+  });
+
+  if (authStage === 'portal') {
+    return;
+  }
+
+  if (authStage !== 'two-factor') {
     const messages = await readVisibleAuthMessages(page);
     const suffix = messages.length > 0 ? ` ${messages.join(' ')}` : '';
     throw new Error(`CFX password login did not reach the 2FA screen.${suffix}`);
@@ -430,6 +531,8 @@ async function authenticateToCfx(options) {
     portalUrl = DEFAULT_PORTAL_URL,
     authTimeoutMs = DEFAULT_AUTH_TIMEOUT_MS,
     twoFactorTimeoutMs = DEFAULT_TWO_FACTOR_TIMEOUT_MS,
+    emailVerificationTimeoutMs = DEFAULT_EMAIL_VERIFICATION_TIMEOUT_MS,
+    onLog = () => {},
   } = options;
 
   const resolvedAuthMethod = auth?.method || (providedCredential || passkeyCredentialPath ? 'passkey' : null);
@@ -459,6 +562,8 @@ async function authenticateToCfx(options) {
         auth,
         authTimeoutMs,
         twoFactorTimeoutMs,
+        emailVerificationTimeoutMs,
+        onLog,
       });
     } else if (resolvedAuthMethod === 'passkey') {
       if (!providedCredential && !passkeyCredentialPath) {
@@ -514,6 +619,8 @@ module.exports = {
   DEFAULT_TWO_FACTOR_TIMEOUT_MS,
   authenticateToCfx,
   authenticateWithPassword,
+  CfxEmailVerificationTimeoutError,
+  isEmailVerificationChallengeText,
   normalizeTwoFactorCode,
   resolveTwoFactorCode,
   validatePasswordAuth,
