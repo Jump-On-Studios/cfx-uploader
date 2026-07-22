@@ -61,6 +61,8 @@ async function resolveCfxHttpSession(options = {}) {
     authTimeoutMs,
     twoFactorTimeoutMs,
     emailVerificationTimeoutMs,
+    browserProfilePath,
+    headlessFingerprint,
     onLog,
   } = options;
 
@@ -106,6 +108,8 @@ async function resolveCfxHttpSession(options = {}) {
       authTimeoutMs,
       twoFactorTimeoutMs,
       emailVerificationTimeoutMs,
+      browserProfilePath,
+      headlessFingerprint,
       onLog,
     });
 

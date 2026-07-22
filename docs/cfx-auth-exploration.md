@@ -2,7 +2,9 @@
 
 Exploration date: 2026-07-21
 
-Status: complete for the nominal username/password + 2FA flow and HTTP CLI validation. Negative-code and paste-behavior exploration remains pending.
+Last update: 2026-07-22 (2FA screen reached through an email login link)
+
+Status: complete for the nominal username/password + 2FA flow and for DOM identification of the email-link + 2FA flow. Headless execution of the latter still needs to be validated end to end. Negative-code and paste-behavior exploration remains pending.
 
 ## Scope
 
@@ -95,7 +97,7 @@ After waiting and re-attaching to the private tab, the throttling message was no
 
 The nominal flow is implemented by `src/auth/cfx-auth.js` for the HTTP/library path and was validated through the HTTP CLI. The browser CLI intentionally remains passkey-focused.
 
-## Two-Factor Authentication Screen
+## Two-Factor Authentication After Direct Password Submission
 
 After the second login attempt, CFX transitioned to the 2FA state without displaying the throttling message.
 
@@ -118,6 +120,109 @@ The visual/a11y structure shows six digit positions, but the DOM uses one visibl
 The account and password inputs remain in the DOM but become hidden. The automation should target `#login-second-factor` or the accessible name `Enter 6 numbers`, not six positional inputs.
 
 Still pending: whether the field accepts a pasted six-digit value, whether non-digits are rejected client-side, and the exact error behavior after submitting an invalid or expired code.
+
+## Two-Factor Authentication After An Email Login Link
+
+Exploration date: 2026-07-22
+
+Evidence: a screenshot and a browser DOM capture taken after opening a valid email login link in a visible browser. The credential-bearing token is intentionally omitted from this document.
+
+Sanitized route:
+
+```text
+https://forum.cfx.re/session/email-login/<REDACTED_32_HEX_TOKEN>
+```
+
+Visible content:
+
+```text
+heading "Two-Factor Authentication"
+paragraph "Please enter the authentication code from your app:"
+textbox "Enter 6 numbers"
+button "Finish Login"
+```
+
+Important observed behavior: entering all six digits does **not** submit this page automatically. The user must manually click `Finish Login`. Headless automation must reproduce that explicit click exactly once after filling the OTP input.
+
+This is not the same DOM as the 2FA state displayed inside the regular `/login` form. In particular, `#login-second-factor` does not exist on this page. Waiting exclusively for that selector therefore causes the headless workflow to remain blocked until its authentication timeout, even though navigation to the email link succeeded and the 2FA page is already visible.
+
+The relevant sanitized DOM structure is:
+
+```html
+<div class="container email-login clearfix">
+  <form>
+    <div class="email-login-form">
+      <div id="second-factor">
+        <h3>Two-Factor Authentication</h3>
+        <p class="second-factor__description">
+          Please enter the authentication code from your app:
+        </p>
+
+        <div class="d-otp">
+          <div class="d-otp-group">
+            <!-- Six visual slots; these are div elements, not inputs. -->
+          </div>
+          <div class="d-otp-input-wrapper">
+            <input
+              inputmode="numeric"
+              autocomplete="one-time-code"
+              data-slot="input-otp"
+              class="d-otp-input second-factor-token-input"
+              maxlength="6"
+              aria-label="Enter 6 numbers"
+            >
+          </div>
+        </div>
+      </div>
+
+      <button class="btn btn-primary" type="submit">
+        <span class="d-button-label">Finish Login</span>
+      </button>
+    </div>
+  </form>
+</div>
+```
+
+Observed input metadata:
+
+| Purpose | Preferred selector | Supporting attributes | Max length |
+|---|---|---|---:|
+| Email-link 2FA code | `input[data-slot="input-otp"]` | `inputmode="numeric"`, `autocomplete="one-time-code"`, `aria-label="Enter 6 numbers"` | `6` |
+
+Useful state and submission selectors:
+
+| Purpose | Selector or condition |
+|---|---|
+| 2FA state container | `#second-factor` |
+| Composite OTP input | `input[data-slot="input-otp"]` |
+| Defensive OTP fallback | `input.second-factor-token-input[autocomplete="one-time-code"][maxlength="6"]` |
+| Owning form | `input[data-slot="input-otp"]` followed through `closest("form")` |
+| Submit control | The owning form's visible `button[type="submit"]`, whose observed label is `Finish Login` |
+
+The six boxes visible in the screenshot are presentation-only `.d-otp-slot` elements. Automation must type the complete six-digit code into the single composite input rather than trying to address six individual fields.
+
+For this email-link variant, filling all six digits does not submit the form automatically in the observed workflow. Automation must explicitly submit the owning form once, preferably by clicking its visible `button[type="submit"]` after preparing the navigation/state-transition wait. It must still guard against a future auto-submit variant so that it never submits twice.
+
+After `Finish Login` is submitted successfully, the observed destination is the authenticated forum home page:
+
+```text
+https://forum.cfx.re/
+```
+
+This is an intermediate success state, not the final Portal authentication result. Automation must then navigate explicitly to `https://portal.cfx.re/assets/created-assets`, perform at most one `Sign in with` handoff if Portal redirects to `/login`, and accept the workflow only after `Created Assets` becomes visible.
+
+### Headless implementation consequence
+
+Immediately after `page.goto(emailLoginLink)` completes, authentication state detection should accept either of these visible inputs:
+
+```text
+#login-second-factor
+input[data-slot="input-otp"]
+```
+
+The first selector represents the regular login-page 2FA variant; the second represents the email-login route captured here. The code-entry and submit routine should resolve the visible input first, then locate the submit button inside that input's own form. This avoids coupling submission to page-wide button text and prevents accidentally clicking an unrelated control.
+
+If neither selector appears, safe diagnostics may record the sanitized URL, document title, headings, input metadata, and button labels. They must never record the email-link token, input values, cookies, password, or 2FA code.
 
 ## Successful Authentication And SSO Handoff
 
@@ -145,4 +250,11 @@ Implementation implication: the password/2FA strategy must allow for a post-2FA 
 
 ## Selector Guidance
 
-Prefer the observed accessible names and roles above. Avoid hashed CSS classes and positional selectors. The eventual implementation should wait for visible page states and explicit messages instead of relying on fixed delays.
+Prefer the observed accessible names, semantic attributes, and roles above. Avoid hashed CSS classes and positional selectors. The implementation should wait for visible page states and explicit messages instead of relying on fixed delays.
+
+The two confirmed 2FA variants must remain distinct:
+
+| Entry path | 2FA input | Submit label | Submission behavior observed |
+|---|---|---|---|
+| Direct password login | `#login-second-factor` | `Log In` | Auto-submit after the sixth digit was observed |
+| Email login link | `input[data-slot="input-otp"]` | `Finish Login` | Explicit form submission is required |

@@ -1,5 +1,8 @@
 const { resolvePasskeyCredential } = require('../auth/passkey-credential');
-const { createConsoleTwoFactorCodeProvider } = require('../auth/two-factor-prompt');
+const {
+  createConsoleEmailVerificationLinkProvider,
+  createConsoleTwoFactorCodeProvider,
+} = require('../auth/two-factor-prompt');
 const { parseAuthMethodFromArgs } = require('../utils/args');
 
 function resolveHttpAuthMethod(args = process.argv.slice(2)) {
@@ -31,6 +34,7 @@ async function resolveHttpCliAuth({ args, projectRoot }) {
         method: 'password',
         email: process.env.CFX_UPLOADER_EMAIL,
         password: process.env.CFX_UPLOADER_PASSWORD,
+        emailVerificationLinkProvider: createConsoleEmailVerificationLinkProvider(),
         twoFactorCodeProvider: createConsoleTwoFactorCodeProvider(),
       },
       passkey: null,

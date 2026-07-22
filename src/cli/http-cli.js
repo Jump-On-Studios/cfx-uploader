@@ -55,6 +55,9 @@ async function runHttpCli(args = process.argv.slice(2)) {
     sessionCachePath: process.env.CFX_UPLOADER_SESSION_CACHE_PATH || null,
     sessionEncryptionKey: process.env.CFX_UPLOADER_SESSION_KEY || null,
     twoFactorTimeoutMs: resolveTwoFactorTimeoutMs(process.env.CFX_UPLOADER_2FA_TIMEOUT_MS),
+    emailVerificationTimeoutMs: resolveTwoFactorTimeoutMs(process.env.CFX_UPLOADER_EMAIL_VERIFICATION_TIMEOUT_MS),
+    browserProfilePath: process.env.CFX_UPLOADER_BROWSER_PROFILE_PATH || null,
+    headlessFingerprint: process.env.CFX_UPLOADER_HEADLESS_FINGERPRINT || 'native',
   });
 }
 

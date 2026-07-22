@@ -33,3 +33,4 @@ passkey-credential.json
 # CFX authenticated session cache
 .cfx-uploader/
 .cfx-session*
+.cfx-browser-profile/

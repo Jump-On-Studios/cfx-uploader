@@ -56,6 +56,16 @@ test('requires a password and a 2FA provider', () => {
     () => validatePasswordAuth({ method: 'password', email: 'user@example.test', password: 'password' }),
     /twoFactorCodeProvider/,
   );
+  assert.throws(
+    () => validatePasswordAuth({
+      method: 'password',
+      email: 'user@example.test',
+      password: 'password',
+      twoFactorCodeProvider: async () => '123456',
+      emailVerificationLinkProvider: 'not-a-function',
+    }),
+    /emailVerificationLinkProvider/,
+  );
 });
 
 test('detects the CFX new-device email challenge', () => {
@@ -92,6 +102,8 @@ test('drives the visible password and composite 2FA fields', async () => {
       if (source.includes('hasTwoFactor') && source.includes('pageText')) {
         return {
           hasTwoFactor: phase === '2fa',
+          twoFactorKind: phase === '2fa' ? 'password-login' : null,
+          twoFactorSelector: phase === '2fa' ? '#login-second-factor' : null,
           portalLoaded: phase === 'portal-ready',
           pageText: '',
         };
@@ -172,6 +184,8 @@ test('waits for email verification, reloads once approved, and submits the form 
       if (source.includes('hasTwoFactor') && source.includes('pageText')) {
         return {
           hasTwoFactor: phase === '2fa',
+          twoFactorKind: phase === '2fa' ? 'password-login' : null,
+          twoFactorSelector: phase === '2fa' ? '#login-second-factor' : null,
           portalLoaded: false,
           pageText: phase === 'email'
             ? 'It looks like you are connecting from a new device or location. Please log in via email.'
@@ -242,6 +256,144 @@ test('waits for email verification, reloads once approved, and submits the form 
   assert.deepEqual(typed, ['test@example.test', 'test-password', '123456']);
   assert.match(logs.join('\n'), /email verification required/i);
   assert.match(logs.join('\n'), /2FA screen is now available/i);
+});
+
+test('submits email-link 2FA, returns through forum home, and completes the Portal SSO handoff', async () => {
+  const emailLink = 'https://forum.cfx.re/session/email-login/0123456789abcdef0123456789abcdef';
+  const portalUrl = 'https://portal.cfx.re/assets/created-assets';
+  let phase = 'initial';
+  let navigationResolve = null;
+  let emailProviderCalls = 0;
+  let twoFactorProviderCalls = 0;
+  let twoFactorSubmitClicks = 0;
+  let portalLoginClicks = 0;
+  const typed = [];
+  const navigations = [];
+  const logs = [];
+
+  const completeNavigation = () => {
+    if (navigationResolve) {
+      const resolve = navigationResolve;
+      navigationResolve = null;
+      resolve();
+    }
+  };
+
+  const page = {
+    async goto(url) {
+      navigations.push(url);
+      if (url === emailLink) {
+        phase = 'email-2fa';
+      } else if (phase === 'forum-home') {
+        phase = 'portal-login';
+      } else {
+        phase = 'portal-entry';
+      }
+    },
+    async waitForFunction(_fn, _options, selector) {
+      assert.ok([
+        '#login-account-name',
+        '#login-account-password',
+        'input[data-slot="input-otp"]',
+      ].includes(selector));
+    },
+    async evaluate(fn, args) {
+      const source = fn.toString();
+      if (source.includes('hasTwoFactor') && source.includes('pageText')) {
+        return {
+          hasTwoFactor: phase === 'email-2fa',
+          twoFactorKind: phase === 'email-2fa' ? 'email-login' : null,
+          twoFactorSelector: phase === 'email-2fa' ? 'input[data-slot="input-otp"]' : null,
+          portalLoaded: phase === 'portal-ready',
+          pageText: phase === 'email-challenge'
+            ? 'It looks like you are connecting from a new device or location. Please log in via email.'
+            : '',
+        };
+      }
+      if (source.includes("querySelectorAll('button')") && source.includes('Created Assets')) {
+        portalLoginClicks += 1;
+        if (phase === 'portal-entry') {
+          phase = 'forum-login';
+        } else if (phase === 'portal-login') {
+          phase = 'portal-ready';
+          completeNavigation();
+        }
+        return true;
+      }
+      if (args?.selector === '#login-form') {
+        phase = 'email-challenge';
+        completeNavigation();
+        return true;
+      }
+      if (args?.kind === 'email-login') {
+        twoFactorSubmitClicks += 1;
+        phase = 'forum-home';
+        completeNavigation();
+        return true;
+      }
+      if (source.includes('Created Assets')) {
+        return phase === 'portal-ready';
+      }
+      return [];
+    },
+    async focus() {},
+    keyboard: {
+      async down() {},
+      async press() {},
+      async up() {},
+      async type(value) {
+        typed.push(value);
+      },
+    },
+    waitForNavigation() {
+      return new Promise((resolve) => {
+        navigationResolve = resolve;
+      });
+    },
+    url() {
+      if (phase === 'email-2fa') return emailLink;
+      if (phase === 'forum-home') return 'https://forum.cfx.re/';
+      if (phase === 'portal-login') return 'https://portal.cfx.re/login?return=%2Fassets%2Fcreated-assets';
+      if (phase === 'portal-ready') return `${portalUrl}?page=1`;
+      if (phase === 'portal-entry') return 'https://portal.cfx.re/login';
+      return 'https://forum.cfx.re/login';
+    },
+    async reload() {
+      throw new Error('reload must not be used when a link provider is configured');
+    },
+  };
+
+  await authenticateWithPassword({
+    page,
+    portalUrl,
+    auth: {
+      email: 'test@example.test',
+      password: 'test-password',
+      emailVerificationLinkProvider: async () => {
+        emailProviderCalls += 1;
+        return emailLink;
+      },
+      twoFactorCodeProvider: async () => {
+        twoFactorProviderCalls += 1;
+        return '123456';
+      },
+    },
+    authTimeoutMs: 1000,
+    emailVerificationTimeoutMs: 1000,
+    twoFactorTimeoutMs: 1000,
+    onLog: (message) => logs.push(message),
+  });
+
+  assert.equal(emailProviderCalls, 1);
+  assert.equal(twoFactorProviderCalls, 1);
+  assert.equal(twoFactorSubmitClicks, 1);
+  assert.equal(portalLoginClicks, 2);
+  assert.equal(navigations.filter((url) => url === portalUrl).length, 2);
+  assert.deepEqual(typed, ['test@example.test', 'test-password', '123456']);
+  assert.equal(phase, 'portal-ready');
+  assert.equal(logs.join('\n').includes(emailLink), false);
+  assert.equal(logs.join('\n').includes('123456'), false);
+  assert.equal(logs.join('\n').includes('test-password'), false);
 });
 
 test('fails clearly when email verification times out', async () => {

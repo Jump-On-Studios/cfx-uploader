@@ -98,6 +98,10 @@ await upload({
     method: 'password',
     email: process.env.CFX_UPLOADER_EMAIL,
     password: process.env.CFX_UPLOADER_PASSWORD,
+    emailVerificationLinkProvider: async ({ attempt, timeoutMs }) => {
+      console.log(`Waiting for the CFX email-login link (attempt ${attempt}, ${timeoutMs}ms timeout)`);
+      return await getEmailLoginLinkFromYourWorkflow();
+    },
     twoFactorCodeProvider: async ({ attempt, timeoutMs }) => {
       console.log(`Waiting for CFX 2FA code (attempt ${attempt}, ${timeoutMs}ms timeout)`);
       return await getCodeFromYourWorkflow();
@@ -107,10 +111,20 @@ await upload({
   sessionEncryptionKey: process.env.CFX_UPLOADER_SESSION_KEY,
   twoFactorTimeoutMs: 10 * 60 * 1000,
   emailVerificationTimeoutMs: 10 * 60 * 1000,
+  browserProfilePath: '/var/lib/cfx-uploader/browser-profile',
+  headlessFingerprint: 'normalized',
 });
 ```
 
-The provider must return exactly six digits. The code is never logged or stored. If CFX requires a new-device email verification, the uploader waits for the email approval and reloads the page until the 2FA screen becomes available.
+The 2FA provider must return exactly six digits. The email provider must return an HTTPS `forum.cfx.re/session/email-login/<token>` link. Both values are treated as secrets and are never logged or stored. The link is opened in the same Chromium profile so that the resulting 2FA session belongs to the headless browser.
+
+To validate authentication without downloading or uploading a release, run:
+
+```bash
+npm run auth-check
+```
+
+The command uses the configured encrypted session cache first, then performs one fresh browser authentication when necessary.
 
 ## Passkey Setup
 
@@ -293,8 +307,10 @@ export async function handleGithubReleaseWebhook(payload) {
 | `githubToken` | yes | GitHub token used to read releases and download archives. |
 | `passkey` | conditional | Passkey credential object for the default/passkey mode. Not needed with `auth.method: 'password'`. |
 | `passkeyJson` | no | Alternative JSON string form of the passkey credential. |
-| `auth` | no | Password authentication object with `method`, `email`, `password`, and `twoFactorCodeProvider`. |
+| `auth` | no | Password authentication object with `method`, `email`, `password`, `twoFactorCodeProvider`, and optional `emailVerificationLinkProvider`. |
 | `headless` | no | Browser auth mode. Defaults to `true`. |
+| `browserProfilePath` | no | Persistent Chromium user-data directory used to preserve the recognized browser identity. |
+| `headlessFingerprint` | no | `native` (default) or `normalized` for coherent UA, Client Hints, viewport, and screen metrics. |
 | `workDir` | no | Working directory for temporary files. Defaults to an OS temp folder. |
 | `sessionCachePath` | no | Explicit path for the encrypted CFX session cache. No cache is used when omitted. |
 | `sessionEncryptionKey` | no | Secret used to encrypt the session cache. Required with `sessionCachePath`. |
@@ -604,6 +620,9 @@ Recommended server-side variables:
 | `CFX_UPLOADER_SESSION_CACHE_PATH` | no | Explicit encrypted CFX session cache path. |
 | `CFX_UPLOADER_SESSION_KEY` | no | Encryption secret for the CFX session cache. |
 | `CFX_UPLOADER_2FA_TIMEOUT_MS` | no | CLI 2FA provider timeout in milliseconds. Defaults to `600000`. |
+| `CFX_UPLOADER_EMAIL_VERIFICATION_TIMEOUT_MS` | no | CLI email-link provider timeout in milliseconds. Defaults to `600000`. |
+| `CFX_UPLOADER_BROWSER_PROFILE_PATH` | no | Persistent Chromium profile path used by fresh browser authentication. |
+| `CFX_UPLOADER_HEADLESS_FINGERPRINT` | no | `native` (default) or `normalized`. |
 | `CFX_UPLOADER_WORKDIR` | no | Optional persistent working directory for integrations. |
 
 CLI-only variables:

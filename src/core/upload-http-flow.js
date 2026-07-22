@@ -41,6 +41,8 @@ async function runHttpUploadFlow(options) {
     authTimeoutMs,
     twoFactorTimeoutMs,
     emailVerificationTimeoutMs,
+    browserProfilePath = null,
+    headlessFingerprint = 'native',
     releasesDir = path.join(projectRoot, 'releases'),
     tempExtractDir = path.join(releasesDir, '.tmp-extract'),
     onLog = (message) => console.log(message),
@@ -225,6 +227,8 @@ async function runHttpUploadFlow(options) {
       authTimeoutMs,
       twoFactorTimeoutMs,
       emailVerificationTimeoutMs,
+      browserProfilePath,
+      headlessFingerprint,
       onLog: log,
     });
     const session = sessionResult.session;

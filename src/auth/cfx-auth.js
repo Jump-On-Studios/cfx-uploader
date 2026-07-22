@@ -3,6 +3,7 @@
  * Launch Puppeteer, perform CFX passkey SSO, and return an authenticated page context.
  */
 const path = require('path');
+const os = require('os');
 const puppeteer = require('puppeteer');
 const {
   loadPasskeyCredentialFromFile,
@@ -14,6 +15,18 @@ const DEFAULT_AUTH_TIMEOUT_MS = 30000;
 const DEFAULT_TWO_FACTOR_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_EMAIL_VERIFICATION_TIMEOUT_MS = 10 * 60 * 1000;
 const EMAIL_VERIFICATION_POLL_INTERVAL_MS = 2000;
+const TWO_FACTOR_AUTO_SUBMIT_GRACE_MS = 1000;
+const NORMALIZED_VIEWPORT = { width: 1280, height: 800 };
+const NORMALIZED_SCREEN = { width: 1920, height: 1080 };
+const EMAIL_LOGIN_PATH_PATTERN = /^\/session\/email-login\/[a-f0-9]{32}\/?$/i;
+const TWO_FACTOR_INPUT_VARIANTS = [
+  { kind: 'password-login', selector: '#login-second-factor' },
+  { kind: 'email-login', selector: 'input[data-slot="input-otp"]' },
+  {
+    kind: 'email-login',
+    selector: 'input.second-factor-token-input[autocomplete="one-time-code"][maxlength="6"]',
+  },
+];
 
 /**
  * Small helper for deterministic waits in SSO transitions.
@@ -68,8 +81,8 @@ async function retryOnNavigationContext(operation, options = {}) {
  * @param {boolean} headless
  * @returns {import('puppeteer').LaunchOptions}
  */
-function createLaunchOptions(headless) {
-  return {
+function createLaunchOptions(headless, browserProfilePath = null) {
+  const options = {
     headless,
     protocolTimeout: 120000,
     args: [
@@ -78,8 +91,125 @@ function createLaunchOptions(headless) {
       '--disable-blink-features=AutomationControlled',
       '--window-size=1280,800',
     ],
-    defaultViewport: { width: 1280, height: 800 },
+    defaultViewport: NORMALIZED_VIEWPORT,
   };
+
+  if (browserProfilePath) {
+    options.userDataDir = path.resolve(browserProfilePath);
+  }
+
+  return options;
+}
+
+function normalizeHeadlessUserAgent(userAgent) {
+  return String(userAgent || '').replace(/HeadlessChrome\//g, 'Chrome/');
+}
+
+function resolveUserAgentPlatform() {
+  if (process.platform === 'win32') return { metadata: 'Windows', navigator: 'Win32' };
+  if (process.platform === 'darwin') return { metadata: 'macOS', navigator: 'MacIntel' };
+  return { metadata: 'Linux', navigator: 'Linux x86_64' };
+}
+
+function buildUserAgentMetadata(userAgent) {
+  const fullVersion = String(userAgent).match(/Chrome\/([\d.]+)/)?.[1] || '0.0.0.0';
+  const majorVersion = fullVersion.split('.')[0];
+  const platform = resolveUserAgentPlatform().metadata;
+  return {
+    brands: [
+      { brand: 'Not_A Brand', version: '99' },
+      { brand: 'Chromium', version: majorVersion },
+    ],
+    fullVersionList: [
+      { brand: 'Not_A Brand', version: '99.0.0.0' },
+      { brand: 'Chromium', version: fullVersion },
+    ],
+    fullVersion,
+    platform,
+    platformVersion: os.release(),
+    architecture: process.arch === 'arm64' ? 'arm' : 'x86',
+    model: '',
+    mobile: false,
+    bitness: process.arch.includes('64') ? '64' : '32',
+    wow64: false,
+  };
+}
+
+async function configurePageFingerprint(page, mode = 'native', onLog = () => {}) {
+  if (mode !== 'native' && mode !== 'normalized') {
+    throw new Error(`Unsupported headless fingerprint mode: ${mode}`);
+  }
+
+  if (mode === 'normalized') {
+    const originalUserAgent = await page.browser().userAgent();
+    const userAgent = normalizeHeadlessUserAgent(originalUserAgent);
+    const client = await page.createCDPSession();
+    await client.send('Emulation.setUserAgentOverride', {
+      userAgent,
+      platform: resolveUserAgentPlatform().navigator,
+      userAgentMetadata: buildUserAgentMetadata(userAgent),
+    });
+    await client.send('Emulation.setDeviceMetricsOverride', {
+      width: NORMALIZED_VIEWPORT.width,
+      height: NORMALIZED_VIEWPORT.height,
+      screenWidth: NORMALIZED_SCREEN.width,
+      screenHeight: NORMALIZED_SCREEN.height,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
+  }
+
+  const fingerprint = await page.evaluate(() => ({
+    userAgent: navigator.userAgent,
+    brands: navigator.userAgentData?.brands || [],
+    platform: navigator.platform,
+    webdriver: navigator.webdriver,
+    language: navigator.language,
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    viewport: { width: window.innerWidth, height: window.innerHeight },
+    screen: { width: window.screen.width, height: window.screen.height },
+  }));
+  onLog(`Browser fingerprint: ${JSON.stringify(fingerprint)}`);
+  return fingerprint;
+}
+
+function normalizeEmailVerificationLink(value) {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error('CFX email verification provider must return a valid login link.');
+  }
+
+  let url;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    throw new Error('CFX email verification provider must return a valid login link.');
+  }
+
+  if (
+    url.protocol !== 'https:' ||
+    url.hostname !== 'forum.cfx.re' ||
+    url.port ||
+    url.username ||
+    url.password ||
+    url.hash ||
+    !EMAIL_LOGIN_PATH_PATTERN.test(url.pathname)
+  ) {
+    throw new Error('CFX email verification link is not an allowed forum.cfx.re email-login URL.');
+  }
+
+  return url.toString();
+}
+
+function sanitizeCfxUrl(value) {
+  try {
+    const url = new URL(String(value || ''));
+    if (url.hostname === 'forum.cfx.re' && url.pathname.startsWith('/session/email-login/')) {
+      return `${url.origin}/session/email-login/[redacted]`;
+    }
+    return url.toString();
+  } catch {
+    return '[invalid URL]';
+  }
 }
 
 /**
@@ -126,14 +256,18 @@ async function setupVirtualAuthenticator(options) {
  * @param {{ page: import('puppeteer').Page, timeoutMs?: number }} options
  * @returns {Promise<boolean>}
  */
+async function isPortalLoaded(page) {
+  return page
+    .evaluate(() => Boolean(document.body && document.body.innerText.includes('Created Assets')))
+    .catch(() => false);
+}
+
 async function waitForPortalLoaded(options) {
   const { page, timeoutMs = 30000 } = options;
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
-    const hasCreatedAssets = await page
-      .evaluate(() => document.body && document.body.innerText.includes('Created Assets'))
-      .catch(() => false);
+    const hasCreatedAssets = await isPortalLoaded(page);
 
     if (hasCreatedAssets) {
       return true;
@@ -211,7 +345,7 @@ async function waitForVisibleSelector(page, selector, timeoutMs = DEFAULT_AUTH_T
 }
 
 async function readPasswordAuthState(page) {
-  return page.evaluate(() => {
+  return page.evaluate((twoFactorVariants) => {
     const isVisible = (selector) => {
       const element = document.querySelector(selector);
       if (!element) {
@@ -223,12 +357,65 @@ async function readPasswordAuthState(page) {
       return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
     };
 
+    const twoFactorVariant = twoFactorVariants.find(({ selector }) => isVisible(selector)) || null;
+
     return {
-      hasTwoFactor: isVisible('#login-second-factor'),
+      hasTwoFactor: Boolean(twoFactorVariant),
+      twoFactorKind: twoFactorVariant?.kind || null,
+      twoFactorSelector: twoFactorVariant?.selector || null,
       portalLoaded: Boolean(document.body && document.body.innerText.includes('Created Assets')),
       pageText: document.body?.innerText || '',
     };
-  }).catch(() => ({ hasTwoFactor: false, portalLoaded: false, pageText: '' }));
+  }, TWO_FACTOR_INPUT_VARIANTS).catch(() => ({
+    hasTwoFactor: false,
+    twoFactorKind: null,
+    twoFactorSelector: null,
+    portalLoaded: false,
+    pageText: '',
+  }));
+}
+
+async function readSafeAuthPageDiagnostic(page) {
+  const details = await page.evaluate(() => {
+    const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim().slice(0, 160);
+    const isVisible = (element) => {
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+    };
+
+    return {
+      title: normalize(document.title),
+      headings: Array.from(document.querySelectorAll('h1, h2, h3'))
+        .filter(isVisible)
+        .map((element) => normalize(element.textContent))
+        .filter(Boolean)
+        .slice(0, 5),
+      inputs: Array.from(document.querySelectorAll('input'))
+        .filter(isVisible)
+        .map((input) => ({
+          id: normalize(input.id),
+          name: normalize(input.name),
+          type: normalize(input.type),
+          inputMode: normalize(input.inputMode),
+          autocomplete: normalize(input.autocomplete),
+          maxLength: input.maxLength,
+          ariaLabel: normalize(input.getAttribute('aria-label')),
+          dataSlot: normalize(input.getAttribute('data-slot')),
+        }))
+        .slice(0, 10),
+      buttons: Array.from(document.querySelectorAll('button, input[type="submit"]'))
+        .filter(isVisible)
+        .map((button) => normalize(button.textContent || button.value || button.getAttribute('aria-label')))
+        .filter(Boolean)
+        .slice(0, 10),
+    };
+  }).catch(() => ({ title: '', headings: [], inputs: [], buttons: [] }));
+
+  return {
+    url: sanitizeCfxUrl(page.url()),
+    ...details,
+  };
 }
 
 function isEmailVerificationChallengeText(text) {
@@ -236,6 +423,18 @@ function isEmailVerificationChallengeText(text) {
   const mentionsNewLocation = normalized.includes('new device') || normalized.includes('new location');
   const mentionsEmail = normalized.includes('via email') || normalized.includes('check the email');
   return mentionsNewLocation && mentionsEmail;
+}
+
+function isLoginRateLimitedText(text) {
+  return String(text || '').toLowerCase().includes('please wait before trying to log in again');
+}
+
+class CfxLoginRateLimitedError extends Error {
+  constructor() {
+    super('CFX login is temporarily rate limited. Wait for the cooldown before starting another authentication.');
+    this.name = 'CfxLoginRateLimitedError';
+    this.code = 'CFX_LOGIN_RATE_LIMITED';
+  }
 }
 
 class CfxEmailVerificationTimeoutError extends Error {
@@ -247,19 +446,45 @@ class CfxEmailVerificationTimeoutError extends Error {
   }
 }
 
+async function resolveEmailVerificationLink(provider, context, timeoutMs) {
+  let timeoutHandle;
+  try {
+    const link = await Promise.race([
+      Promise.resolve().then(() => provider(context)),
+      new Promise((_, reject) => {
+        timeoutHandle = setTimeout(() => reject(new CfxEmailVerificationTimeoutError(timeoutMs)), timeoutMs);
+      }),
+    ]);
+    return normalizeEmailVerificationLink(link);
+  } catch (error) {
+    if (error instanceof CfxEmailVerificationTimeoutError) throw error;
+    if (String(error?.message || '').startsWith('CFX email verification')) throw error;
+    throw new Error('CFX email verification link provider failed.');
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
+}
+
 async function waitForPasswordAuthStage(options) {
   const {
     page,
     authTimeoutMs = DEFAULT_AUTH_TIMEOUT_MS,
     emailVerificationTimeoutMs = DEFAULT_EMAIL_VERIFICATION_TIMEOUT_MS,
+    emailVerificationLinkProvider,
     onLog = () => {},
   } = options;
   const initialDeadline = Date.now() + authTimeoutMs;
   let emailVerificationDeadline = null;
   let challengeLogged = false;
+  let linkRequested = false;
+  let unrecognizedEmailLinkStateLogged = false;
 
   while (Date.now() < (emailVerificationDeadline || initialDeadline)) {
     const state = await readPasswordAuthState(page);
+
+    if (isLoginRateLimitedText(state.pageText)) {
+      throw new CfxLoginRateLimitedError();
+    }
 
     if (state.portalLoaded) {
       return 'portal';
@@ -279,6 +504,22 @@ async function waitForPasswordAuthStage(options) {
         onLog(`CFX email verification required. Approve the link sent by email; waiting up to ${Math.ceil(emailVerificationTimeoutMs / 60000)} minutes.`);
       }
 
+      if (typeof emailVerificationLinkProvider === 'function' && !linkRequested) {
+        linkRequested = true;
+        const verificationLink = await resolveEmailVerificationLink(
+          emailVerificationLinkProvider,
+          { attempt: 1, timeoutMs: emailVerificationTimeoutMs },
+          emailVerificationTimeoutMs,
+        );
+        try {
+          await page.goto(verificationLink, { waitUntil: 'load' });
+        } catch {
+          throw new Error('CFX email verification link could not be opened in the authentication browser.');
+        }
+        onLog('CFX email verification link opened in the authentication browser.');
+        continue;
+      }
+
       if (Date.now() >= emailVerificationDeadline) {
         throw new CfxEmailVerificationTimeoutError(emailVerificationTimeoutMs);
       }
@@ -286,6 +527,12 @@ async function waitForPasswordAuthStage(options) {
       await page.reload({ waitUntil: 'load' }).catch(() => {});
       await sleep(EMAIL_VERIFICATION_POLL_INTERVAL_MS);
       continue;
+    }
+
+    if (linkRequested && !unrecognizedEmailLinkStateLogged) {
+      unrecognizedEmailLinkStateLogged = true;
+      const diagnostic = await readSafeAuthPageDiagnostic(page);
+      onLog(`CFX authentication page not yet recognized after email verification: ${JSON.stringify(diagnostic)}`);
     }
 
     await sleep(250);
@@ -385,6 +632,13 @@ function validatePasswordAuth(auth) {
   if (typeof auth.twoFactorCodeProvider !== 'function') {
     throw new Error('Password authentication requires auth.twoFactorCodeProvider.');
   }
+
+  if (
+    auth.emailVerificationLinkProvider !== undefined &&
+    typeof auth.emailVerificationLinkProvider !== 'function'
+  ) {
+    throw new Error('Password authentication requires auth.emailVerificationLinkProvider to be a function when provided.');
+  }
 }
 
 function normalizeTwoFactorCode(code) {
@@ -428,6 +682,122 @@ async function fillVisibleInput(page, selector, value) {
   await page.keyboard.type(value);
 }
 
+async function clickTwoFactorSubmit(page, variant) {
+  try {
+    return await page.evaluate(({ kind, selector }) => {
+      const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      const isVisible = (element) => {
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+        return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+      };
+      const input = document.querySelector(selector);
+      const form = input?.closest('form');
+      if (!input || !isVisible(input) || !form) {
+        return false;
+      }
+
+      const expectedLabel = kind === 'email-login' ? 'finish login' : 'log in';
+      const submitButton = Array.from(form.querySelectorAll('button[type="submit"], input[type="submit"]'))
+        .find((candidate) => {
+          const label = normalize(
+            candidate.textContent || candidate.value || candidate.getAttribute('aria-label') || candidate.getAttribute('title')
+          );
+          return (
+            label === expectedLabel &&
+            isVisible(candidate) &&
+            candidate.disabled !== true &&
+            candidate.getAttribute('aria-disabled') !== 'true'
+          );
+        });
+
+      if (!submitButton) {
+        return false;
+      }
+
+      submitButton.click();
+      return true;
+    }, variant);
+  } catch (error) {
+    if (isNavigationContextError(error)) {
+      return true;
+    }
+    throw error;
+  }
+}
+
+async function waitForTwoFactorExit(page, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const state = await readPasswordAuthState(page);
+    if (!state.hasTwoFactor) {
+      return true;
+    }
+    await sleep(100);
+  }
+  return false;
+}
+
+async function submitTwoFactorCode(page, code, authTimeoutMs = DEFAULT_AUTH_TIMEOUT_MS) {
+  const initialState = await readPasswordAuthState(page);
+  if (!initialState.hasTwoFactor || !initialState.twoFactorSelector || !initialState.twoFactorKind) {
+    const diagnostic = await readSafeAuthPageDiagnostic(page);
+    throw new Error(`CFX 2FA input was not found. State: ${JSON.stringify(diagnostic)}`);
+  }
+
+  const variant = {
+    kind: initialState.twoFactorKind,
+    selector: initialState.twoFactorSelector,
+  };
+  let navigationDetected = false;
+  const navigationAbortController = new AbortController();
+  const navigationPromise = page
+    .waitForNavigation({
+      waitUntil: 'load',
+      timeout: authTimeoutMs,
+      signal: navigationAbortController.signal,
+    })
+    .then(() => {
+      navigationDetected = true;
+      return true;
+    })
+    .catch(() => false);
+
+  try {
+    try {
+      await fillVisibleInput(page, variant.selector, code);
+    } catch (error) {
+      if (!isNavigationContextError(error)) throw error;
+    }
+
+    await Promise.race([navigationPromise, sleep(TWO_FACTOR_AUTO_SUBMIT_GRACE_MS)]);
+    if (!navigationDetected) {
+      const state = await readPasswordAuthState(page);
+      if (state.hasTwoFactor) {
+        const clicked = await clickTwoFactorSubmit(page, {
+          kind: state.twoFactorKind || variant.kind,
+          selector: state.twoFactorSelector || variant.selector,
+        });
+        if (!clicked) {
+          throw new Error(`CFX 2FA submit button was not found for the ${variant.kind} flow.`);
+        }
+      }
+    }
+
+    const transitioned = await waitForTwoFactorExit(page, authTimeoutMs);
+    if (!transitioned) {
+      const messages = await readVisibleAuthMessages(page);
+      const suffix = messages.length > 0 ? ` ${messages.join(' ')}` : '';
+      const diagnostic = await readSafeAuthPageDiagnostic(page);
+      throw new Error(`CFX 2FA submission did not leave the 2FA screen.${suffix} State: ${JSON.stringify(diagnostic)}`);
+    }
+
+    await Promise.race([navigationPromise, sleep(500)]);
+  } finally {
+    navigationAbortController.abort();
+  }
+}
+
 async function authenticateWithPassword(options) {
   const {
     page,
@@ -460,6 +830,7 @@ async function authenticateWithPassword(options) {
     page,
     authTimeoutMs,
     emailVerificationTimeoutMs,
+    emailVerificationLinkProvider: auth.emailVerificationLinkProvider,
     onLog,
   });
 
@@ -482,26 +853,37 @@ async function authenticateWithPassword(options) {
     twoFactorTimeoutMs,
   );
 
-  const twoFactorNavigation = page.waitForNavigation({ waitUntil: 'load', timeout: authTimeoutMs }).catch(() => null);
-  try {
-    await fillVisibleInput(page, '#login-second-factor', code);
-  } catch (error) {
-    if (!isNavigationContextError(error)) {
-      throw error;
-    }
-  }
-  await twoFactorNavigation;
+  await submitTwoFactorCode(page, code, authTimeoutMs);
 
-  if (await waitForPortalLoaded({ page, timeoutMs: 2000 })) {
+  if (await isPortalLoaded(page)) {
     return;
   }
 
-  if (!page.url().includes('portal.cfx.re')) {
-    await page.goto(portalUrl, { waitUntil: 'load' });
+  await page.goto(portalUrl, { waitUntil: 'load' });
+
+  let isPortalLogin = false;
+  try {
+    const currentUrl = new URL(page.url());
+    isPortalLogin = currentUrl.origin === 'https://portal.cfx.re' && currentUrl.pathname === '/login';
+  } catch {
+    isPortalLogin = false;
   }
 
-  if (page.url().includes('/login')) {
-    await clickPortalLoginButton(page);
+  if (isPortalLogin) {
+    const handoffAbortController = new AbortController();
+    const handoffNavigation = page
+      .waitForNavigation({
+        waitUntil: 'load',
+        timeout: authTimeoutMs,
+        signal: handoffAbortController.signal,
+      })
+      .catch(() => null);
+    try {
+      await clickPortalLoginButton(page);
+      await Promise.race([handoffNavigation, sleep(3000)]);
+    } finally {
+      handoffAbortController.abort();
+    }
   }
 
   const loaded = await waitForPortalLoaded({ page, timeoutMs: authTimeoutMs });
@@ -532,6 +914,8 @@ async function authenticateToCfx(options) {
     authTimeoutMs = DEFAULT_AUTH_TIMEOUT_MS,
     twoFactorTimeoutMs = DEFAULT_TWO_FACTOR_TIMEOUT_MS,
     emailVerificationTimeoutMs = DEFAULT_EMAIL_VERIFICATION_TIMEOUT_MS,
+    browserProfilePath = null,
+    headlessFingerprint = 'native',
     onLog = () => {},
   } = options;
 
@@ -549,11 +933,12 @@ async function authenticateToCfx(options) {
     validatePasswordAuth(auth);
   }
 
-  const browser = await puppeteer.launch(createLaunchOptions(headless));
+  const browser = await puppeteer.launch(createLaunchOptions(headless, browserProfilePath));
 
   try {
     const pages = await browser.pages();
     const page = pages[0] || (await browser.newPage());
+    await configurePageFingerprint(page, headlessFingerprint, onLog);
 
     if (resolvedAuthMethod === 'password') {
       await authenticateWithPassword({
@@ -605,7 +990,7 @@ async function authenticateToCfx(options) {
 
     const loaded = await waitForPortalLoaded({ page, timeoutMs: 30000 });
     if (!loaded) {
-      throw new Error(`Portal failed to load (timeout), last URL: ${page.url()}`);
+      throw new Error(`Portal failed to load (timeout), last URL: ${sanitizeCfxUrl(page.url())}`);
     }
 
     return { browser, page, authMethod: resolvedAuthMethod };
@@ -620,8 +1005,19 @@ module.exports = {
   authenticateToCfx,
   authenticateWithPassword,
   CfxEmailVerificationTimeoutError,
+  CfxLoginRateLimitedError,
+  buildUserAgentMetadata,
+  configurePageFingerprint,
+  createLaunchOptions,
   isEmailVerificationChallengeText,
+  isLoginRateLimitedText,
+  normalizeEmailVerificationLink,
+  normalizeHeadlessUserAgent,
   normalizeTwoFactorCode,
+  resolveEmailVerificationLink,
+  sanitizeCfxUrl,
   resolveTwoFactorCode,
+  submitTwoFactorCode,
   validatePasswordAuth,
+  waitForPasswordAuthStage,
 };
