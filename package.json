@@ -39,7 +39,7 @@
   },
   "type": "commonjs",
   "dependencies": {
-    "adm-zip": "^0.5.17",
+    "adm-zip": "^0.6.0",
     "dotenv": "^17.4.0",
     "puppeteer": "^24.40.0"
   }

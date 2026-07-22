@@ -38,6 +38,22 @@ function validatePasswordAuth(auth) {
   }
 }
 
+function resolvePasskeySource(options = {}) {
+  if (options.passkeySource) {
+    return options.passkeySource;
+  }
+
+  if (options.passkeyJson) {
+    return 'passkeyJson';
+  }
+
+  if (options.passkey) {
+    return 'passkey';
+  }
+
+  return null;
+}
+
 function validateUploadOptions(options) {
   if (!options || typeof options !== 'object') {
     throw new Error('Upload options are required.');
@@ -124,7 +140,7 @@ async function upload(options = {}) {
     githubToken: options.githubToken,
     auth: options.auth,
     passkey: resolvedPasskey,
-    passkeySource: options.passkeySource || (options.passkeyJson ? 'passkeyJson' : 'passkey'),
+    passkeySource: resolvePasskeySource(options),
     fallbackConfig: {},
     headless: options.headless !== false,
     releaseCandidate: options.releaseCandidate,
@@ -155,5 +171,6 @@ module.exports = {
   createUploader,
   upload,
   resolveLibraryPasskey,
+  resolvePasskeySource,
   validatePasswordAuth,
 };
