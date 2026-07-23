@@ -6,6 +6,7 @@ const {
   CfxLoginRateLimitedError,
   configurePageFingerprint,
   createLaunchOptions,
+  ensurePortalAuthenticated,
   normalizeEmailVerificationLink,
   normalizeHeadlessUserAgent,
   resolveEmailVerificationLink,
@@ -294,6 +295,63 @@ test('does not click Finish Login if an email-link form starts auto-submitting',
   const fixture = createTwoFactorPage({ autoSubmit: true, kind: 'email-login' });
   await submitTwoFactorCode(fixture.page, '123456', 2000);
   assert.equal(fixture.getClicks(), 0);
+});
+
+test('waits for Portal hydration and clicks the SSO button exactly once', async () => {
+  let phase = 'forum';
+  let entryReads = 0;
+  let clicks = 0;
+  let navigationResolve = null;
+  const navigations = [];
+  const logs = [];
+  const page = {
+    async goto(url) {
+      navigations.push(url);
+      phase = 'portal-login';
+    },
+    async evaluate(fn) {
+      const source = fn.toString();
+      if (source.includes('hasLoginButton') && source.includes('portalLoaded')) {
+        entryReads += 1;
+        return {
+          portalLoaded: false,
+          hasLoginButton: entryReads >= 2,
+        };
+      }
+      if (source.includes("querySelectorAll('button')") && source.includes('Created Assets')) {
+        clicks += 1;
+        phase = 'portal-ready';
+        if (navigationResolve) navigationResolve();
+        return true;
+      }
+      if (source.includes('Created Assets')) {
+        return phase === 'portal-ready';
+      }
+      return false;
+    },
+    waitForNavigation() {
+      return new Promise((resolve) => {
+        navigationResolve = resolve;
+      });
+    },
+    url() {
+      return phase === 'portal-ready'
+        ? 'https://portal.cfx.re/assets/created-assets'
+        : 'https://portal.cfx.re/login';
+    },
+  };
+
+  await ensurePortalAuthenticated({
+    page,
+    portalUrl: 'https://portal.cfx.re/assets/created-assets',
+    authTimeoutMs: 1000,
+    onLog: (message) => logs.push(message),
+  });
+
+  assert.deepEqual(navigations, ['https://portal.cfx.re/assets/created-assets']);
+  assert.equal(entryReads, 2);
+  assert.equal(clicks, 1);
+  assert.match(logs.join('\n'), /SSO handoff started/);
 });
 
 test('fails immediately when CFX reports a login rate limit', async () => {

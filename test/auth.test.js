@@ -87,6 +87,77 @@ test('builds an HTTP session from restored cookies', () => {
   assert.match(session.baseHeaders.cookie, /session=value/);
 });
 
+test('marks missing Portal and API cookies as an authentication fallback condition', () => {
+  assert.throws(
+    () => createCfxHttpSessionFromCookies([]),
+    (error) => error.code === 'CFX_PORTAL_SESSION_UNAVAILABLE' && error.isCfxAuthError === true,
+  );
+});
+
+test('accepts an existing authenticated Forum profile without reopening the password form', async () => {
+  let phase = 'portal-login';
+  let providerCalls = 0;
+  const logs = [];
+  const page = {
+    async goto() {},
+    async evaluate(fn) {
+      const source = fn.toString();
+      if (source.includes('hasLoginButton') && source.includes('portalLoaded')) {
+        return { portalLoaded: false, hasLoginButton: true };
+      }
+      if (source.includes('hasPasswordForm') && source.includes('forumAuthenticated')) {
+        return {
+          portalLoaded: false,
+          hasPasswordForm: false,
+          forumAuthenticated: phase === 'forum-home',
+        };
+      }
+      if (source.includes("querySelectorAll('button')") && source.includes('Created Assets')) {
+        phase = 'forum-home';
+        return true;
+      }
+      if (source.includes('Created Assets')) return false;
+      return [];
+    },
+    waitForNavigation() {
+      return Promise.resolve();
+    },
+    async focus() {
+      throw new Error('password fields must not be focused for an authenticated profile');
+    },
+    keyboard: {
+      async down() {},
+      async press() {},
+      async up() {},
+      async type() {
+        throw new Error('credentials must not be typed for an authenticated profile');
+      },
+    },
+    url() {
+      return phase === 'forum-home' ? 'https://forum.cfx.re/' : 'https://portal.cfx.re/login';
+    },
+  };
+
+  await authenticateWithPassword({
+    page,
+    portalUrl: 'https://portal.cfx.re/assets/created-assets',
+    auth: {
+      email: 'test@example.test',
+      password: 'test-password',
+      twoFactorCodeProvider: async () => {
+        providerCalls += 1;
+        return '123456';
+      },
+    },
+    authTimeoutMs: 1000,
+    onLog: (message) => logs.push(message),
+  });
+
+  assert.equal(providerCalls, 0);
+  assert.equal(phase, 'forum-home');
+  assert.match(logs.join('\n'), /existing authenticated CFX Forum profile/i);
+});
+
 test('drives the visible password and composite 2FA fields', async () => {
   let phase = 'portal';
   const typed = [];
@@ -107,6 +178,12 @@ test('drives the visible password and composite 2FA fields', async () => {
           portalLoaded: phase === 'portal-ready',
           pageText: '',
         };
+      }
+      if (source.includes('hasLoginButton') && source.includes('portalLoaded')) {
+        return { portalLoaded: false, hasLoginButton: true };
+      }
+      if (source.includes('hasPasswordForm') && source.includes('forumAuthenticated')) {
+        return { portalLoaded: false, hasPasswordForm: phase === 'forum-login', forumAuthenticated: false };
       }
       if (source.includes("querySelectorAll('button')") && source.includes('Created Assets')) {
         phase = 'forum-login';
@@ -192,6 +269,12 @@ test('waits for email verification, reloads once approved, and submits the form 
             : '',
         };
       }
+      if (source.includes('hasLoginButton') && source.includes('portalLoaded')) {
+        return { portalLoaded: false, hasLoginButton: true };
+      }
+      if (source.includes('hasPasswordForm') && source.includes('forumAuthenticated')) {
+        return { portalLoaded: false, hasPasswordForm: phase === 'forum-login', forumAuthenticated: false };
+      }
       if (source.includes("querySelectorAll('button')") && source.includes('Created Assets')) {
         phase = 'forum-login';
         return true;
@@ -258,7 +341,7 @@ test('waits for email verification, reloads once approved, and submits the form 
   assert.match(logs.join('\n'), /2FA screen is now available/i);
 });
 
-test('submits email-link 2FA, returns through forum home, and completes the Portal SSO handoff', async () => {
+test('submits email-link 2FA and stops on the authenticated forum home', async () => {
   const emailLink = 'https://forum.cfx.re/session/email-login/0123456789abcdef0123456789abcdef';
   const portalUrl = 'https://portal.cfx.re/assets/created-assets';
   let phase = 'initial';
@@ -309,6 +392,12 @@ test('submits email-link 2FA, returns through forum home, and completes the Port
             ? 'It looks like you are connecting from a new device or location. Please log in via email.'
             : '',
         };
+      }
+      if (source.includes('hasLoginButton') && source.includes('portalLoaded')) {
+        return { portalLoaded: false, hasLoginButton: true };
+      }
+      if (source.includes('hasPasswordForm') && source.includes('forumAuthenticated')) {
+        return { portalLoaded: false, hasPasswordForm: phase === 'forum-login', forumAuthenticated: false };
       }
       if (source.includes("querySelectorAll('button')") && source.includes('Created Assets')) {
         portalLoginClicks += 1;
@@ -387,10 +476,10 @@ test('submits email-link 2FA, returns through forum home, and completes the Port
   assert.equal(emailProviderCalls, 1);
   assert.equal(twoFactorProviderCalls, 1);
   assert.equal(twoFactorSubmitClicks, 1);
-  assert.equal(portalLoginClicks, 2);
-  assert.equal(navigations.filter((url) => url === portalUrl).length, 2);
+  assert.equal(portalLoginClicks, 1);
+  assert.equal(navigations.filter((url) => url === portalUrl).length, 1);
   assert.deepEqual(typed, ['test@example.test', 'test-password', '123456']);
-  assert.equal(phase, 'portal-ready');
+  assert.equal(phase, 'forum-home');
   assert.equal(logs.join('\n').includes(emailLink), false);
   assert.equal(logs.join('\n').includes('123456'), false);
   assert.equal(logs.join('\n').includes('test-password'), false);
@@ -408,6 +497,15 @@ test('fails clearly when email verification times out', async () => {
           portalLoaded: false,
           pageText: 'It looks like you are connecting from a new device or location. Please log in via email.',
         };
+      }
+      if (source.includes('hasLoginButton') && source.includes('portalLoaded')) {
+        return { portalLoaded: false, hasLoginButton: true };
+      }
+      if (source.includes('hasPasswordForm') && source.includes('forumAuthenticated')) {
+        return { portalLoaded: false, hasPasswordForm: true, forumAuthenticated: false };
+      }
+      if (source.includes("querySelectorAll('button')") && source.includes('Created Assets')) {
+        return true;
       }
       if (args?.selector === '#login-form') {
         return true;

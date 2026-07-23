@@ -386,7 +386,7 @@ The package also exports lower-level helpers:
 import { uploadHttp, uploadBrowser } from 'cfx-uploader';
 ```
 
-When a session cache is configured, the first run authenticates with Puppeteer and saves the CFX cookies encrypted. The encrypted payload contains only CFX cookies, User-Agent, and cache metadata; it never contains the password, 2FA code, passkey, or GitHub token. Later runs validate the cached session through the CFX API and skip Puppeteer while it remains valid. A `401` or `403` during initial session validation invalidates the cache and triggers one fresh authentication.
+When a session cache is configured, the first run authenticates with Puppeteer and saves the CFX cookies encrypted. After password/email 2FA returns to the authenticated Forum, the HTTP workflow first validates any Portal/API cookies already available through `GET /v1/me/assets`. It skips the Portal UI when that succeeds; otherwise, missing cookies or a `401`/`403` triggers one Portal SSO handoff before a second validation. The encrypted payload is written only after validation and contains only CFX cookies, User-Agent, and cache metadata; it never contains the password, email login link, 2FA code, passkey, or GitHub token. Later runs validate the cached session through the CFX API and skip Puppeteer while it remains valid.
 
 These are mainly intended for advanced usage and CLI wrappers.
 

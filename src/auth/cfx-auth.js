@@ -293,7 +293,17 @@ async function clickPortalLoginButton(page) {
 
       const button = Array.from(document.querySelectorAll('button')).find((candidate) => {
         const text = candidate.textContent?.trim().toLowerCase();
-        return text === 'sign in with' || candidate.matches('button[class*="login_noWrap"]');
+        const rect = candidate.getBoundingClientRect();
+        const style = window.getComputedStyle(candidate);
+        return (
+          (text === 'sign in with' || candidate.matches('button[class*="login_noWrap"]')) &&
+          rect.width > 0 &&
+          rect.height > 0 &&
+          style.visibility !== 'hidden' &&
+          style.display !== 'none' &&
+          candidate.disabled !== true &&
+          candidate.getAttribute('aria-disabled') !== 'true'
+        );
       });
 
       if (!button) {
@@ -325,6 +335,127 @@ async function clickPasskeyButton(page) {
       return false;
     })
   );
+}
+
+async function readPortalEntryState(page) {
+  return page.evaluate(() => {
+    const isVisible = (element) => {
+      if (!element) return false;
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+    };
+    const loginButton = Array.from(document.querySelectorAll('button')).find((candidate) => {
+      const text = candidate.textContent?.trim().toLowerCase();
+      return (
+        (text === 'sign in with' || candidate.matches('button[class*="login_noWrap"]')) &&
+        isVisible(candidate) &&
+        candidate.disabled !== true &&
+        candidate.getAttribute('aria-disabled') !== 'true'
+      );
+    });
+
+    return {
+      portalLoaded: Boolean(document.body && document.body.innerText.includes('Created Assets')),
+      hasLoginButton: Boolean(loginButton),
+    };
+  }).catch(() => ({ portalLoaded: false, hasLoginButton: false }));
+}
+
+async function waitForPortalEntryState(page, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const state = await readPortalEntryState(page);
+    if (state.portalLoaded || state.hasLoginButton) {
+      return state;
+    }
+    await sleep(250);
+  }
+  return { portalLoaded: false, hasLoginButton: false };
+}
+
+async function readPasswordLoginEntryState(page) {
+  return page.evaluate(() => {
+    const isVisible = (selector) => {
+      const element = document.querySelector(selector);
+      if (!element) return false;
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+    };
+
+    return {
+      portalLoaded: Boolean(document.body && document.body.innerText.includes('Created Assets')),
+      hasPasswordForm: isVisible('#login-account-name') && isVisible('#login-account-password'),
+      forumAuthenticated: (
+        window.location.origin === 'https://forum.cfx.re' &&
+        window.location.pathname === '/' &&
+        isVisible('#current-user')
+      ),
+    };
+  }).catch(() => ({ portalLoaded: false, hasPasswordForm: false, forumAuthenticated: false }));
+}
+
+async function waitForPasswordLoginEntryState(page, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const state = await readPasswordLoginEntryState(page);
+    if (state.portalLoaded || state.hasPasswordForm || state.forumAuthenticated) {
+      return state;
+    }
+    await sleep(250);
+  }
+  return { portalLoaded: false, hasPasswordForm: false, forumAuthenticated: false };
+}
+
+async function ensurePortalAuthenticated(options) {
+  const {
+    page,
+    portalUrl = DEFAULT_PORTAL_URL,
+    authTimeoutMs = DEFAULT_AUTH_TIMEOUT_MS,
+    onLog = () => {},
+  } = options;
+
+  if (await isPortalLoaded(page)) {
+    return;
+  }
+
+  await page.goto(portalUrl, { waitUntil: 'load' });
+  const entryState = await waitForPortalEntryState(page, authTimeoutMs);
+  if (entryState.portalLoaded) {
+    return;
+  }
+
+  if (!entryState.hasLoginButton) {
+    const diagnostic = await readSafeAuthPageDiagnostic(page);
+    throw new Error(`CFX Portal SSO entry point was not found. State: ${JSON.stringify(diagnostic)}`);
+  }
+
+  const navigationAbortController = new AbortController();
+  const handoffNavigation = page
+    .waitForNavigation({
+      waitUntil: 'load',
+      timeout: authTimeoutMs,
+      signal: navigationAbortController.signal,
+    })
+    .catch(() => null);
+  try {
+    const clicked = await clickPortalLoginButton(page);
+    if (!clicked) {
+      const diagnostic = await readSafeAuthPageDiagnostic(page);
+      throw new Error(`CFX Portal SSO button was visible but could not be clicked. State: ${JSON.stringify(diagnostic)}`);
+    }
+    onLog('CFX Portal SSO handoff started.');
+    await Promise.race([handoffNavigation, sleep(3000)]);
+  } finally {
+    navigationAbortController.abort();
+  }
+
+  const loaded = await waitForPortalLoaded({ page, timeoutMs: authTimeoutMs });
+  if (!loaded) {
+    const diagnostic = await readSafeAuthPageDiagnostic(page);
+    throw new Error(`CFX Portal SSO handoff did not reach Created Assets. State: ${JSON.stringify(diagnostic)}`);
+  }
 }
 
 async function waitForVisibleSelector(page, selector, timeoutMs = DEFAULT_AUTH_TIMEOUT_MS) {
@@ -813,12 +944,47 @@ async function authenticateWithPassword(options) {
 
   await page.goto(portalUrl, { waitUntil: 'load' });
 
-  if (await waitForPortalLoaded({ page, timeoutMs: 2000 })) {
+  const portalEntryState = await waitForPortalEntryState(page, authTimeoutMs);
+  if (portalEntryState.portalLoaded) {
     return;
   }
+  if (!portalEntryState.hasLoginButton) {
+    const diagnostic = await readSafeAuthPageDiagnostic(page);
+    throw new Error(`CFX Portal login entry point was not found. State: ${JSON.stringify(diagnostic)}`);
+  }
 
-  await clickPortalLoginButton(page);
-  await waitForVisibleSelector(page, '#login-account-name', authTimeoutMs);
+  const entryNavigationAbortController = new AbortController();
+  const entryNavigation = page
+    .waitForNavigation({
+      waitUntil: 'load',
+      timeout: authTimeoutMs,
+      signal: entryNavigationAbortController.signal,
+    })
+    .catch(() => null);
+  try {
+    const clicked = await clickPortalLoginButton(page);
+    if (!clicked) {
+      const diagnostic = await readSafeAuthPageDiagnostic(page);
+      throw new Error(`CFX Portal login button was visible but could not be clicked. State: ${JSON.stringify(diagnostic)}`);
+    }
+    await Promise.race([entryNavigation, sleep(3000)]);
+  } finally {
+    entryNavigationAbortController.abort();
+  }
+
+  const loginEntryState = await waitForPasswordLoginEntryState(page, authTimeoutMs);
+  if (loginEntryState.portalLoaded) {
+    return;
+  }
+  if (loginEntryState.forumAuthenticated) {
+    onLog('Existing authenticated CFX Forum profile detected.');
+    return;
+  }
+  if (!loginEntryState.hasPasswordForm) {
+    const diagnostic = await readSafeAuthPageDiagnostic(page);
+    throw new Error(`CFX Forum password login form was not found. State: ${JSON.stringify(diagnostic)}`);
+  }
+
   await fillVisibleInput(page, '#login-account-name', auth.email);
   await fillVisibleInput(page, '#login-account-password', auth.password);
 
@@ -854,44 +1020,6 @@ async function authenticateWithPassword(options) {
   );
 
   await submitTwoFactorCode(page, code, authTimeoutMs);
-
-  if (await isPortalLoaded(page)) {
-    return;
-  }
-
-  await page.goto(portalUrl, { waitUntil: 'load' });
-
-  let isPortalLogin = false;
-  try {
-    const currentUrl = new URL(page.url());
-    isPortalLogin = currentUrl.origin === 'https://portal.cfx.re' && currentUrl.pathname === '/login';
-  } catch {
-    isPortalLogin = false;
-  }
-
-  if (isPortalLogin) {
-    const handoffAbortController = new AbortController();
-    const handoffNavigation = page
-      .waitForNavigation({
-        waitUntil: 'load',
-        timeout: authTimeoutMs,
-        signal: handoffAbortController.signal,
-      })
-      .catch(() => null);
-    try {
-      await clickPortalLoginButton(page);
-      await Promise.race([handoffNavigation, sleep(3000)]);
-    } finally {
-      handoffAbortController.abort();
-    }
-  }
-
-  const loaded = await waitForPortalLoaded({ page, timeoutMs: authTimeoutMs });
-  if (!loaded) {
-    const messages = await readVisibleAuthMessages(page);
-    const suffix = messages.length > 0 ? ` ${messages.join(' ')}` : '';
-    throw new Error(`Portal failed to load after password authentication.${suffix}`);
-  }
 }
 
 /**
@@ -916,6 +1044,7 @@ async function authenticateToCfx(options) {
     emailVerificationTimeoutMs = DEFAULT_EMAIL_VERIFICATION_TIMEOUT_MS,
     browserProfilePath = null,
     headlessFingerprint = 'native',
+    requirePortalPage = true,
     onLog = () => {},
   } = options;
 
@@ -988,9 +1117,13 @@ async function authenticateToCfx(options) {
       }
     }
 
-    const loaded = await waitForPortalLoaded({ page, timeoutMs: 30000 });
-    if (!loaded) {
-      throw new Error(`Portal failed to load (timeout), last URL: ${sanitizeCfxUrl(page.url())}`);
+    if (requirePortalPage) {
+      await ensurePortalAuthenticated({
+        page,
+        portalUrl,
+        authTimeoutMs,
+        onLog,
+      });
     }
 
     return { browser, page, authMethod: resolvedAuthMethod };
@@ -1009,6 +1142,7 @@ module.exports = {
   buildUserAgentMetadata,
   configurePageFingerprint,
   createLaunchOptions,
+  ensurePortalAuthenticated,
   isEmailVerificationChallengeText,
   isLoginRateLimitedText,
   normalizeEmailVerificationLink,
