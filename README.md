@@ -116,7 +116,7 @@ await upload({
 });
 ```
 
-The 2FA provider must return exactly six digits. The email provider must return an HTTPS `forum.cfx.re/session/email-login/<token>` link. Both values are treated as secrets and are never logged or stored. The link is opened in the same Chromium profile so that the resulting 2FA session belongs to the headless browser.
+The 2FA provider must return exactly six digits. The email provider must return an HTTPS `forum.cfx.re/session/email-login/<token>` link. Both values are treated as secrets and are never logged or stored. The link is opened in the same Chromium profile so that the resulting 2FA session belongs to the headless browser. An expired or already-consumed link fails immediately with error code `CFX_EMAIL_LOGIN_LINK_INVALID`; request a new link before restarting authentication.
 
 To validate authentication without downloading or uploading a release, run:
 
@@ -661,6 +661,8 @@ Common errors:
 | Password auth | `Password authentication requires ...` | Username, password, or an asynchronous 2FA provider is missing. |
 | Password auth | `CFX 2FA provider must return exactly six digits.` | The external 2FA provider returned an invalid value. |
 | Password auth | `CFX 2FA code provider timed out.` | No 2FA code was supplied before the configured timeout. |
+| Password auth | `CFX_EMAIL_LOGIN_LINK_INVALID` | The supplied email-login link is expired, already consumed, or invalid. Request a new link and restart authentication. |
+| Password auth | `CFX_LOGIN_RATE_LIMITED` | CFX is throttling login attempts. Wait for the cooldown; the library does not retry automatically. |
 | Session cache | `CFX session cache requires ...` | A cache path was configured without an encryption key. |
 | Session cache | `Unable to decrypt CFX session cache...` | The cache key is wrong or the encrypted file is corrupted. |
 | GitHub release | `No downloadable release found for ...` | The release/tag could not be found or has no downloadable archive. |

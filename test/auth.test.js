@@ -69,12 +69,9 @@ test('requires a password and a 2FA provider', () => {
 });
 
 test('detects the CFX new-device email challenge', () => {
-  assert.equal(
-    isEmailVerificationChallengeText(
-      'It looks like you are connecting from a new device or location. Please log in via email.',
-    ),
-    true,
-  );
+  assert.equal(isEmailVerificationChallengeText('new device or location'), true);
+  assert.equal(isEmailVerificationChallengeText('A new device was detected. Email sent.'), true);
+  assert.equal(isEmailVerificationChallengeText('Sign-in from a new location.'), true);
   assert.equal(isEmailVerificationChallengeText('Enter your six-digit verification code.'), false);
 });
 
@@ -107,16 +104,16 @@ test('accepts an existing authenticated Forum profile without reopening the pass
       }
       if (source.includes('hasPasswordForm') && source.includes('forumAuthenticated')) {
         return {
-          portalLoaded: false,
+          portalLoaded: phase === 'portal-ready',
           hasPasswordForm: false,
           forumAuthenticated: phase === 'forum-home',
         };
       }
-      if (source.includes("querySelectorAll('button')") && source.includes('Created Assets')) {
+      if (source.includes('sign in with') && source.includes('button.click()')) {
         phase = 'forum-home';
         return true;
       }
-      if (source.includes('Created Assets')) return false;
+      if (source.includes('hasSelectedTab')) return false;
       return [];
     },
     waitForNavigation() {
@@ -176,6 +173,7 @@ test('drives the visible password and composite 2FA fields', async () => {
           twoFactorKind: phase === '2fa' ? 'password-login' : null,
           twoFactorSelector: phase === '2fa' ? '#login-second-factor' : null,
           portalLoaded: phase === 'portal-ready',
+          forumAuthenticated: false,
           pageText: '',
         };
       }
@@ -185,15 +183,15 @@ test('drives the visible password and composite 2FA fields', async () => {
       if (source.includes('hasPasswordForm') && source.includes('forumAuthenticated')) {
         return { portalLoaded: false, hasPasswordForm: phase === 'forum-login', forumAuthenticated: false };
       }
-      if (source.includes("querySelectorAll('button')") && source.includes('Created Assets')) {
+      if (source.includes('sign in with') && source.includes('button.click()')) {
         phase = 'forum-login';
         return true;
       }
-      if (args?.selector === '#login-form') {
+      if (args === undefined && source.includes('#login-button') && source.includes('button.click()')) {
         phase = '2fa';
         return true;
       }
-      if (source.includes('Created Assets')) {
+      if (source.includes('hasSelectedTab')) {
         return phase === 'portal-ready';
       }
       return [];
@@ -263,7 +261,8 @@ test('waits for email verification, reloads once approved, and submits the form 
           hasTwoFactor: phase === '2fa',
           twoFactorKind: phase === '2fa' ? 'password-login' : null,
           twoFactorSelector: phase === '2fa' ? '#login-second-factor' : null,
-          portalLoaded: false,
+          portalLoaded: phase === 'portal-ready',
+          forumAuthenticated: false,
           pageText: phase === 'email'
             ? 'It looks like you are connecting from a new device or location. Please log in via email.'
             : '',
@@ -275,15 +274,15 @@ test('waits for email verification, reloads once approved, and submits the form 
       if (source.includes('hasPasswordForm') && source.includes('forumAuthenticated')) {
         return { portalLoaded: false, hasPasswordForm: phase === 'forum-login', forumAuthenticated: false };
       }
-      if (source.includes("querySelectorAll('button')") && source.includes('Created Assets')) {
+      if (source.includes('sign in with') && source.includes('button.click()')) {
         phase = 'forum-login';
         return true;
       }
-      if (args?.selector === '#login-form') {
+      if (args === undefined && source.includes('#login-button') && source.includes('button.click()')) {
         phase = 'email';
         return true;
       }
-      if (source.includes('Created Assets')) {
+      if (source.includes('hasSelectedTab')) {
         return phase === 'portal-ready';
       }
       return [];
@@ -388,6 +387,7 @@ test('submits email-link 2FA and stops on the authenticated forum home', async (
           twoFactorKind: phase === 'email-2fa' ? 'email-login' : null,
           twoFactorSelector: phase === 'email-2fa' ? 'input[data-slot="input-otp"]' : null,
           portalLoaded: phase === 'portal-ready',
+          forumAuthenticated: phase === 'forum-home',
           pageText: phase === 'email-challenge'
             ? 'It looks like you are connecting from a new device or location. Please log in via email.'
             : '',
@@ -399,7 +399,7 @@ test('submits email-link 2FA and stops on the authenticated forum home', async (
       if (source.includes('hasPasswordForm') && source.includes('forumAuthenticated')) {
         return { portalLoaded: false, hasPasswordForm: phase === 'forum-login', forumAuthenticated: false };
       }
-      if (source.includes("querySelectorAll('button')") && source.includes('Created Assets')) {
+      if (source.includes('sign in with') && source.includes('button.click()')) {
         portalLoginClicks += 1;
         if (phase === 'portal-entry') {
           phase = 'forum-login';
@@ -409,7 +409,7 @@ test('submits email-link 2FA and stops on the authenticated forum home', async (
         }
         return true;
       }
-      if (args?.selector === '#login-form') {
+      if (args === undefined && source.includes('#login-button') && source.includes('button.click()')) {
         phase = 'email-challenge';
         completeNavigation();
         return true;
@@ -420,7 +420,7 @@ test('submits email-link 2FA and stops on the authenticated forum home', async (
         completeNavigation();
         return true;
       }
-      if (source.includes('Created Assets')) {
+      if (source.includes('hasSelectedTab')) {
         return phase === 'portal-ready';
       }
       return [];
@@ -495,6 +495,7 @@ test('fails clearly when email verification times out', async () => {
         return {
           hasTwoFactor: false,
           portalLoaded: false,
+          forumAuthenticated: false,
           pageText: 'It looks like you are connecting from a new device or location. Please log in via email.',
         };
       }
@@ -504,13 +505,13 @@ test('fails clearly when email verification times out', async () => {
       if (source.includes('hasPasswordForm') && source.includes('forumAuthenticated')) {
         return { portalLoaded: false, hasPasswordForm: true, forumAuthenticated: false };
       }
-      if (source.includes("querySelectorAll('button')") && source.includes('Created Assets')) {
+      if (source.includes('sign in with') && source.includes('button.click()')) {
         return true;
       }
-      if (args?.selector === '#login-form') {
+      if (args === undefined && source.includes('#login-button') && source.includes('button.click()')) {
         return true;
       }
-      if (source.includes('Created Assets')) {
+      if (source.includes('hasSelectedTab')) {
         return false;
       }
       return [];

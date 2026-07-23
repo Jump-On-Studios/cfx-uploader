@@ -206,7 +206,7 @@ function sanitizeCfxUrl(value) {
     if (url.hostname === 'forum.cfx.re' && url.pathname.startsWith('/session/email-login/')) {
       return `${url.origin}/session/email-login/[redacted]`;
     }
-    return url.toString();
+    return `${url.origin}${url.pathname}`;
   } catch {
     return '[invalid URL]';
   }
@@ -258,7 +258,20 @@ async function setupVirtualAuthenticator(options) {
  */
 async function isPortalLoaded(page) {
   return page
-    .evaluate(() => Boolean(document.body && document.body.innerText.includes('Created Assets')))
+    .evaluate(() => {
+      const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      const isVisible = (element) => {
+        if (!element) return false;
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+        return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+      };
+      const hasHeading = Array.from(document.querySelectorAll('h1, h2, h3'))
+        .some((element) => isVisible(element) && normalize(element.textContent) === 'created assets');
+      const hasSelectedTab = Array.from(document.querySelectorAll('[role="tab"][aria-selected="true"]'))
+        .some((element) => isVisible(element) && normalize(element.textContent) === 'created assets');
+      return hasHeading || hasSelectedTab;
+    })
     .catch(() => false);
 }
 
@@ -279,28 +292,25 @@ async function waitForPortalLoaded(options) {
 }
 
 /**
- * Click the CFX portal sign-in button if it exists.
- * Uses class substring on purpose because classes are hashed.
+ * Click the visible and enabled CFX Portal sign-in button if it exists.
  * @param {import('puppeteer').Page} page
- * @returns {Promise<void>}
+ * @returns {Promise<boolean>}
  */
 async function clickPortalLoginButton(page) {
   return retryOnNavigationContext(() =>
     page.evaluate(() => {
-      if (document.body && document.body.innerText.includes('Created Assets')) {
-        return false;
-      }
-
+      const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      const isVisible = (element) => {
+        if (!element) return false;
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+        return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+      };
       const button = Array.from(document.querySelectorAll('button')).find((candidate) => {
-        const text = candidate.textContent?.trim().toLowerCase();
-        const rect = candidate.getBoundingClientRect();
-        const style = window.getComputedStyle(candidate);
+        const accessibleName = normalize(candidate.getAttribute('aria-label') || candidate.textContent);
         return (
-          (text === 'sign in with' || candidate.matches('button[class*="login_noWrap"]')) &&
-          rect.width > 0 &&
-          rect.height > 0 &&
-          style.visibility !== 'hidden' &&
-          style.display !== 'none' &&
+          accessibleName === 'sign in with' &&
+          isVisible(candidate) &&
           candidate.disabled !== true &&
           candidate.getAttribute('aria-disabled') !== 'true'
         );
@@ -337,63 +347,106 @@ async function clickPasskeyButton(page) {
   );
 }
 
+async function dismissPortalCookieBanner(page) {
+  return retryOnNavigationContext(() =>
+    page.evaluate(() => {
+      const button = document.querySelector('#onetrust-reject-all-handler');
+      if (!button) return false;
+      const rect = button.getBoundingClientRect();
+      const style = window.getComputedStyle(button);
+      const isVisible = rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+      const isDisabled = button.disabled === true || button.getAttribute('aria-disabled') === 'true';
+      if (!isVisible || isDisabled) return false;
+      button.click();
+      return true;
+    })
+  ).catch(() => false);
+}
+
 async function readPortalEntryState(page) {
   return page.evaluate(() => {
+    const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
     const isVisible = (element) => {
       if (!element) return false;
       const rect = element.getBoundingClientRect();
       const style = window.getComputedStyle(element);
       return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
     };
+    const hasHeading = Array.from(document.querySelectorAll('h1, h2, h3'))
+      .some((element) => isVisible(element) && normalize(element.textContent) === 'created assets');
+    const hasSelectedTab = Array.from(document.querySelectorAll('[role="tab"][aria-selected="true"]'))
+      .some((element) => isVisible(element) && normalize(element.textContent) === 'created assets');
     const loginButton = Array.from(document.querySelectorAll('button')).find((candidate) => {
-      const text = candidate.textContent?.trim().toLowerCase();
-      return (
-        (text === 'sign in with' || candidate.matches('button[class*="login_noWrap"]')) &&
-        isVisible(candidate) &&
-        candidate.disabled !== true &&
-        candidate.getAttribute('aria-disabled') !== 'true'
-      );
+      const accessibleName = normalize(candidate.getAttribute('aria-label') || candidate.textContent);
+      return accessibleName === 'sign in with' && isVisible(candidate);
     });
+    const loginButtonDisabled = Boolean(
+      loginButton &&
+      (loginButton.disabled === true || loginButton.getAttribute('aria-disabled') === 'true')
+    );
 
     return {
-      portalLoaded: Boolean(document.body && document.body.innerText.includes('Created Assets')),
+      portalLoaded: hasHeading || hasSelectedTab,
       hasLoginButton: Boolean(loginButton),
+      loginButtonDisabled,
     };
-  }).catch(() => ({ portalLoaded: false, hasLoginButton: false }));
+  }).catch(() => ({ portalLoaded: false, hasLoginButton: false, loginButtonDisabled: false }));
 }
 
 async function waitForPortalEntryState(page, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
+  let lastState = { portalLoaded: false, hasLoginButton: false, loginButtonDisabled: false };
   while (Date.now() < deadline) {
     const state = await readPortalEntryState(page);
-    if (state.portalLoaded || state.hasLoginButton) {
+    lastState = state;
+    if (state.portalLoaded || (state.hasLoginButton && !state.loginButtonDisabled)) {
       return state;
     }
     await sleep(250);
   }
-  return { portalLoaded: false, hasLoginButton: false };
+  return lastState;
 }
 
 async function readPasswordLoginEntryState(page) {
   return page.evaluate(() => {
-    const isVisible = (selector) => {
-      const element = document.querySelector(selector);
+    const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const isVisible = (element) => {
       if (!element) return false;
       const rect = element.getBoundingClientRect();
       const style = window.getComputedStyle(element);
       return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
     };
+    const form = document.querySelector('#login-form');
+    const accountInput = form?.querySelector('#login-account-name');
+    const passwordInput = form?.querySelector('#login-account-password');
+    const currentUserButton = document.querySelector(
+      '#toggle-current-user[aria-label="Notifications and account"]'
+    );
+    const newTopicButton = Array.from(document.querySelectorAll('button')).find((candidate) => {
+      const accessibleName = normalize(candidate.getAttribute('aria-label') || candidate.textContent);
+      return accessibleName === 'new topic' && isVisible(candidate);
+    });
+    const hasHeading = Array.from(document.querySelectorAll('h1, h2, h3'))
+      .some((element) => isVisible(element) && normalize(element.textContent) === 'created assets');
+    const hasSelectedTab = Array.from(document.querySelectorAll('[role="tab"][aria-selected="true"]'))
+      .some((element) => isVisible(element) && normalize(element.textContent) === 'created assets');
 
     return {
-      portalLoaded: Boolean(document.body && document.body.innerText.includes('Created Assets')),
-      hasPasswordForm: isVisible('#login-account-name') && isVisible('#login-account-password'),
+      portalLoaded: hasHeading || hasSelectedTab,
+      hasPasswordForm: isVisible(form) && isVisible(accountInput) && isVisible(passwordInput),
       forumAuthenticated: (
         window.location.origin === 'https://forum.cfx.re' &&
         window.location.pathname === '/' &&
-        isVisible('#current-user')
+        isVisible(currentUserButton)
       ),
+      hasNewTopicButton: Boolean(newTopicButton),
     };
-  }).catch(() => ({ portalLoaded: false, hasPasswordForm: false, forumAuthenticated: false }));
+  }).catch(() => ({
+    portalLoaded: false,
+    hasPasswordForm: false,
+    forumAuthenticated: false,
+    hasNewTopicButton: false,
+  }));
 }
 
 async function waitForPasswordLoginEntryState(page, timeoutMs) {
@@ -405,7 +458,12 @@ async function waitForPasswordLoginEntryState(page, timeoutMs) {
     }
     await sleep(250);
   }
-  return { portalLoaded: false, hasPasswordForm: false, forumAuthenticated: false };
+  return {
+    portalLoaded: false,
+    hasPasswordForm: false,
+    forumAuthenticated: false,
+    hasNewTopicButton: false,
+  };
 }
 
 async function ensurePortalAuthenticated(options) {
@@ -426,11 +484,17 @@ async function ensurePortalAuthenticated(options) {
     return;
   }
 
+  if (entryState.loginButtonDisabled) {
+    const diagnostic = await readSafeAuthPageDiagnostic(page);
+    throw new Error(`CFX Portal SSO handoff remained disabled and did not reach Created Assets. State: ${JSON.stringify(diagnostic)}`);
+  }
+
   if (!entryState.hasLoginButton) {
     const diagnostic = await readSafeAuthPageDiagnostic(page);
     throw new Error(`CFX Portal SSO entry point was not found. State: ${JSON.stringify(diagnostic)}`);
   }
 
+  await dismissPortalCookieBanner(page);
   const navigationAbortController = new AbortController();
   const handoffNavigation = page
     .waitForNavigation({
@@ -477,8 +541,8 @@ async function waitForVisibleSelector(page, selector, timeoutMs = DEFAULT_AUTH_T
 
 async function readPasswordAuthState(page) {
   return page.evaluate((twoFactorVariants) => {
-    const isVisible = (selector) => {
-      const element = document.querySelector(selector);
+    const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const isVisible = (element) => {
       if (!element) {
         return false;
       }
@@ -488,13 +552,27 @@ async function readPasswordAuthState(page) {
       return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
     };
 
-    const twoFactorVariant = twoFactorVariants.find(({ selector }) => isVisible(selector)) || null;
+    const twoFactorVariant = twoFactorVariants.find(
+      ({ selector }) => isVisible(document.querySelector(selector))
+    ) || null;
+    const hasHeading = Array.from(document.querySelectorAll('h1, h2, h3'))
+      .some((element) => isVisible(element) && normalize(element.textContent) === 'created assets');
+    const hasSelectedTab = Array.from(document.querySelectorAll('[role="tab"][aria-selected="true"]'))
+      .some((element) => isVisible(element) && normalize(element.textContent) === 'created assets');
+    const currentUserButton = document.querySelector(
+      '#toggle-current-user[aria-label="Notifications and account"]'
+    );
 
     return {
       hasTwoFactor: Boolean(twoFactorVariant),
       twoFactorKind: twoFactorVariant?.kind || null,
       twoFactorSelector: twoFactorVariant?.selector || null,
-      portalLoaded: Boolean(document.body && document.body.innerText.includes('Created Assets')),
+      portalLoaded: hasHeading || hasSelectedTab,
+      forumAuthenticated: (
+        window.location.origin === 'https://forum.cfx.re' &&
+        window.location.pathname === '/' &&
+        isVisible(currentUserButton)
+      ),
       pageText: document.body?.innerText || '',
     };
   }, TWO_FACTOR_INPUT_VARIANTS).catch(() => ({
@@ -502,6 +580,7 @@ async function readPasswordAuthState(page) {
     twoFactorKind: null,
     twoFactorSelector: null,
     portalLoaded: false,
+    forumAuthenticated: false,
     pageText: '',
   }));
 }
@@ -551,9 +630,11 @@ async function readSafeAuthPageDiagnostic(page) {
 
 function isEmailVerificationChallengeText(text) {
   const normalized = String(text || '').replace(/\s+/g, ' ').trim().toLowerCase();
-  const mentionsNewLocation = normalized.includes('new device') || normalized.includes('new location');
-  const mentionsEmail = normalized.includes('via email') || normalized.includes('check the email');
-  return mentionsNewLocation && mentionsEmail;
+  return normalized.includes('new device') || normalized.includes('new location');
+}
+
+function isEmailLoginLinkInvalidText(text) {
+  return String(text || '').toLowerCase().includes('oops! the link you used no longer works.');
 }
 
 function isLoginRateLimitedText(text) {
@@ -574,6 +655,14 @@ class CfxEmailVerificationTimeoutError extends Error {
     this.name = 'CfxEmailVerificationTimeoutError';
     this.code = 'CFX_EMAIL_VERIFICATION_TIMEOUT';
     this.timeoutMs = timeoutMs;
+  }
+}
+
+class CfxEmailLoginLinkInvalidError extends Error {
+  constructor() {
+    super('The CFX email login link is expired, already consumed, or invalid. Request a new link and restart authentication.');
+    this.name = 'CfxEmailLoginLinkInvalidError';
+    this.code = 'CFX_EMAIL_LOGIN_LINK_INVALID';
   }
 }
 
@@ -617,8 +706,16 @@ async function waitForPasswordAuthStage(options) {
       throw new CfxLoginRateLimitedError();
     }
 
+    if (isEmailLoginLinkInvalidText(state.pageText)) {
+      throw new CfxEmailLoginLinkInvalidError();
+    }
+
     if (state.portalLoaded) {
       return 'portal';
+    }
+
+    if (state.forumAuthenticated) {
+      return 'forum';
     }
 
     if (state.hasTwoFactor) {
@@ -676,59 +773,37 @@ async function waitForPasswordAuthStage(options) {
   return null;
 }
 
-async function clickVisibleButtonByText(page, scopeSelector, expectedText) {
-  const findButton = ({ selector, text, click }) => {
-    const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
-    const expected = normalize(text);
-    const scopedRoot = document.querySelector(selector);
-    const roots = scopedRoot ? [scopedRoot, document] : [document];
-
-    for (const root of roots) {
-      const candidates = Array.from(root.querySelectorAll(
-        'button, input[type="submit"], input[type="button"], [role="button"]'
-      ));
-      const button = candidates.find((candidate) => {
-        const rect = candidate.getBoundingClientRect();
-        const style = window.getComputedStyle(candidate);
-        const label = normalize(
-          candidate.textContent || candidate.value || candidate.getAttribute('aria-label') || candidate.getAttribute('title')
-        );
-        return (
-          label === expected &&
-          rect.width > 0 &&
-          rect.height > 0 &&
-          style.visibility !== 'hidden' &&
-          style.display !== 'none' &&
-          candidate.disabled !== true &&
-          candidate.getAttribute('aria-disabled') !== 'true'
-        );
-      });
-
-      if (button) {
-        if (click) {
-          button.click();
-        }
-        return true;
-      }
-    }
-
-    if (click && scopedRoot && typeof scopedRoot.requestSubmit === 'function') {
-      const rect = scopedRoot.getBoundingClientRect();
-      const style = window.getComputedStyle(scopedRoot);
-      if (rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none') {
-        scopedRoot.requestSubmit();
-        return true;
-      }
-    }
-
-    return false;
-  };
-
-  const deadline = Date.now() + DEFAULT_AUTH_TIMEOUT_MS;
+async function clickPasswordLoginButton(page, timeoutMs = DEFAULT_AUTH_TIMEOUT_MS) {
+  const deadline = Date.now() + timeoutMs;
   let clicked = false;
   while (Date.now() < deadline && !clicked) {
     clicked = await retryOnNavigationContext(() =>
-      page.evaluate(findButton, { selector: scopeSelector, text: expectedText, click: true })
+      page.evaluate(() => {
+        const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+        const isVisible = (element) => {
+          if (!element) return false;
+          const rect = element.getBoundingClientRect();
+          const style = window.getComputedStyle(element);
+          return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+        };
+        const form = document.querySelector('#login-form');
+        const button = document.querySelector('#login-button');
+        const label = normalize(
+          button?.textContent || button?.value || button?.getAttribute('aria-label') || button?.getAttribute('title')
+        );
+        if (
+          !isVisible(form) ||
+          !isVisible(button) ||
+          button.form !== form ||
+          label !== 'log in' ||
+          button.disabled === true ||
+          button.getAttribute('aria-disabled') === 'true'
+        ) {
+          return false;
+        }
+        button.click();
+        return true;
+      })
     );
     if (!clicked) {
       await sleep(250);
@@ -736,7 +811,7 @@ async function clickVisibleButtonByText(page, scopeSelector, expectedText) {
   }
 
   if (!clicked) {
-    throw new Error(`CFX authentication button not found: ${expectedText}`);
+    throw new Error('CFX password login button #login-button was not found or was not actionable.');
   }
 }
 
@@ -818,6 +893,7 @@ async function clickTwoFactorSubmit(page, variant) {
     return await page.evaluate(({ kind, selector }) => {
       const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
       const isVisible = (element) => {
+        if (!element) return false;
         const rect = element.getBoundingClientRect();
         const style = window.getComputedStyle(element);
         return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
@@ -828,19 +904,36 @@ async function clickTwoFactorSubmit(page, variant) {
         return false;
       }
 
-      const expectedLabel = kind === 'email-login' ? 'finish login' : 'log in';
-      const submitButton = Array.from(form.querySelectorAll('button[type="submit"], input[type="submit"]'))
-        .find((candidate) => {
-          const label = normalize(
-            candidate.textContent || candidate.value || candidate.getAttribute('aria-label') || candidate.getAttribute('title')
-          );
-          return (
-            label === expectedLabel &&
-            isVisible(candidate) &&
-            candidate.disabled !== true &&
-            candidate.getAttribute('aria-disabled') !== 'true'
-          );
-        });
+      let submitButton;
+      if (kind === 'password-login') {
+        if (form.id !== 'login-form') return false;
+        const candidate = document.querySelector('#login-button');
+        const label = normalize(
+          candidate?.textContent || candidate?.value || candidate?.getAttribute('aria-label') || candidate?.getAttribute('title')
+        );
+        if (
+          candidate?.form === form &&
+          label === 'log in' &&
+          isVisible(candidate) &&
+          candidate.disabled !== true &&
+          candidate.getAttribute('aria-disabled') !== 'true'
+        ) {
+          submitButton = candidate;
+        }
+      } else {
+        submitButton = Array.from(form.querySelectorAll('button[type="submit"], input[type="submit"]'))
+          .find((candidate) => {
+            const label = normalize(
+              candidate.textContent || candidate.value || candidate.getAttribute('aria-label') || candidate.getAttribute('title')
+            );
+            return (
+              label === 'finish login' &&
+              isVisible(candidate) &&
+              candidate.disabled !== true &&
+              candidate.getAttribute('aria-disabled') !== 'true'
+            );
+          });
+      }
 
       if (!submitButton) {
         return false;
@@ -857,11 +950,11 @@ async function clickTwoFactorSubmit(page, variant) {
   }
 }
 
-async function waitForTwoFactorExit(page, timeoutMs) {
+async function waitForPostTwoFactorState(page, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const state = await readPasswordAuthState(page);
-    if (!state.hasTwoFactor) {
+    if (state.forumAuthenticated || state.portalLoaded) {
       return true;
     }
     await sleep(100);
@@ -881,6 +974,26 @@ async function submitTwoFactorCode(page, code, authTimeoutMs = DEFAULT_AUTH_TIME
     selector: initialState.twoFactorSelector,
   };
   let navigationDetected = false;
+  const markNavigationRequest = (request) => {
+    try {
+      if (request.isNavigationRequest() && request.frame() === page.mainFrame()) {
+        navigationDetected = true;
+      }
+    } catch {
+      // A disappearing request/frame is itself evidence of a transition.
+      navigationDetected = true;
+    }
+  };
+  const markMainFrameNavigation = (frame) => {
+    if (frame === page.mainFrame()) {
+      navigationDetected = true;
+    }
+  };
+  const canObservePageEvents = typeof page.on === 'function' && typeof page.off === 'function';
+  if (canObservePageEvents) {
+    page.on('request', markNavigationRequest);
+    page.on('framenavigated', markMainFrameNavigation);
+  }
   const navigationAbortController = new AbortController();
   const navigationPromise = page
     .waitForNavigation({
@@ -901,7 +1014,8 @@ async function submitTwoFactorCode(page, code, authTimeoutMs = DEFAULT_AUTH_TIME
       if (!isNavigationContextError(error)) throw error;
     }
 
-    await Promise.race([navigationPromise, sleep(TWO_FACTOR_AUTO_SUBMIT_GRACE_MS)]);
+    const submitGraceMs = variant.kind === 'password-login' ? TWO_FACTOR_AUTO_SUBMIT_GRACE_MS : 0;
+    await Promise.race([navigationPromise, sleep(submitGraceMs)]);
     if (!navigationDetected) {
       const state = await readPasswordAuthState(page);
       if (state.hasTwoFactor) {
@@ -915,17 +1029,21 @@ async function submitTwoFactorCode(page, code, authTimeoutMs = DEFAULT_AUTH_TIME
       }
     }
 
-    const transitioned = await waitForTwoFactorExit(page, authTimeoutMs);
+    const transitioned = await waitForPostTwoFactorState(page, authTimeoutMs);
     if (!transitioned) {
       const messages = await readVisibleAuthMessages(page);
       const suffix = messages.length > 0 ? ` ${messages.join(' ')}` : '';
       const diagnostic = await readSafeAuthPageDiagnostic(page);
-      throw new Error(`CFX 2FA submission did not leave the 2FA screen.${suffix} State: ${JSON.stringify(diagnostic)}`);
+      throw new Error(`CFX 2FA submission did not reach an authenticated Forum or Portal state.${suffix} State: ${JSON.stringify(diagnostic)}`);
     }
 
     await Promise.race([navigationPromise, sleep(500)]);
   } finally {
     navigationAbortController.abort();
+    if (canObservePageEvents) {
+      page.off('request', markNavigationRequest);
+      page.off('framenavigated', markMainFrameNavigation);
+    }
   }
 }
 
@@ -948,11 +1066,16 @@ async function authenticateWithPassword(options) {
   if (portalEntryState.portalLoaded) {
     return;
   }
+  if (portalEntryState.loginButtonDisabled) {
+    const diagnostic = await readSafeAuthPageDiagnostic(page);
+    throw new Error(`CFX Portal login handoff remained disabled and did not reach Created Assets. State: ${JSON.stringify(diagnostic)}`);
+  }
   if (!portalEntryState.hasLoginButton) {
     const diagnostic = await readSafeAuthPageDiagnostic(page);
     throw new Error(`CFX Portal login entry point was not found. State: ${JSON.stringify(diagnostic)}`);
   }
 
+  await dismissPortalCookieBanner(page);
   const entryNavigationAbortController = new AbortController();
   const entryNavigation = page
     .waitForNavigation({
@@ -988,19 +1111,27 @@ async function authenticateWithPassword(options) {
   await fillVisibleInput(page, '#login-account-name', auth.email);
   await fillVisibleInput(page, '#login-account-password', auth.password);
 
-  const loginNavigation = page.waitForNavigation({ waitUntil: 'load', timeout: authTimeoutMs }).catch(() => null);
-  await clickVisibleButtonByText(page, '#login-form', 'Log In');
-  await loginNavigation;
+  const loginNavigationAbortController = new AbortController();
+  const loginNavigation = page.waitForNavigation({
+    waitUntil: 'load',
+    timeout: authTimeoutMs,
+    signal: loginNavigationAbortController.signal,
+  }).catch(() => null);
+  let authStage;
+  try {
+    await clickPasswordLoginButton(page, authTimeoutMs);
+    authStage = await waitForPasswordAuthStage({
+      page,
+      authTimeoutMs,
+      emailVerificationTimeoutMs,
+      emailVerificationLinkProvider: auth.emailVerificationLinkProvider,
+      onLog,
+    });
+  } finally {
+    loginNavigationAbortController.abort();
+  }
 
-  const authStage = await waitForPasswordAuthStage({
-    page,
-    authTimeoutMs,
-    emailVerificationTimeoutMs,
-    emailVerificationLinkProvider: auth.emailVerificationLinkProvider,
-    onLog,
-  });
-
-  if (authStage === 'portal') {
+  if (authStage === 'portal' || authStage === 'forum') {
     return;
   }
 
@@ -1137,17 +1268,24 @@ module.exports = {
   DEFAULT_TWO_FACTOR_TIMEOUT_MS,
   authenticateToCfx,
   authenticateWithPassword,
+  CfxEmailLoginLinkInvalidError,
   CfxEmailVerificationTimeoutError,
   CfxLoginRateLimitedError,
   buildUserAgentMetadata,
+  clickPasswordLoginButton,
   configurePageFingerprint,
   createLaunchOptions,
+  dismissPortalCookieBanner,
   ensurePortalAuthenticated,
+  isEmailLoginLinkInvalidText,
   isEmailVerificationChallengeText,
   isLoginRateLimitedText,
+  isPortalLoaded,
   normalizeEmailVerificationLink,
   normalizeHeadlessUserAgent,
   normalizeTwoFactorCode,
+  readPasswordLoginEntryState,
+  readPortalEntryState,
   resolveEmailVerificationLink,
   sanitizeCfxUrl,
   resolveTwoFactorCode,

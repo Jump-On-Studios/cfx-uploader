@@ -92,7 +92,11 @@ input[data-slot="input-otp"]
 input.second-factor-token-input[autocomplete="one-time-code"][maxlength="6"]
 ```
 
-Les diagnostics ne contiennent que l'URL assainie, l'origine, le chemin, le titre, les headings, les metadonnees des inputs et les libelles des boutons. Ils n'incluent jamais les valeurs, tokens, cookies, mots de passe ou codes 2FA.
+Les diagnostics ne contiennent que l'origine et le chemin sans query, le titre, les headings, les metadonnees des inputs et les libelles des boutons. Les tokens email sont remplaces par `[redacted]`. Ils n'incluent jamais les valeurs, payloads SSO signes, tokens, cookies, mots de passe ou codes 2FA.
+
+### Lien email consomme ou expire
+
+La page qui affiche `Oops! The link you used no longer works.` est un echec definitif du lien. Le workflow leve immediatement `CFX_EMAIL_LOGIN_LINK_INVALID`, ne rouvre pas le token, ne rappelle pas le provider email et ne demande aucun code 2FA. L'utilisateur doit demander un nouveau lien avant de relancer l'authentification.
 
 ### Deuxieme blocage : soumission du 2FA email
 
@@ -105,9 +109,9 @@ Le helper de soumission :
 - valide exactement six chiffres ;
 - resout uniquement un input visible ;
 - prepare l'attente de transition avant la saisie ;
-- laisse une courte fenetre a une eventuelle variante auto-submit ;
-- clique une seule fois sur `Log In` pour la variante classique encore visible ;
-- clique une seule fois sur `Finish Login` pour la variante email encore visible ;
+- laisse une courte fenetre d'auto-submit a la variante classique ;
+- clique une seule fois sur `#login-button`, y compris lorsqu'il est `type="button"`, pour la variante classique encore visible ;
+- clique explicitement une seule fois sur `Finish Login` pour la variante email encore visible ;
 - tolere une destruction du contexte JavaScript pendant la navigation ;
 - ne reutilise jamais un code apres une erreur et ne double-clique jamais.
 

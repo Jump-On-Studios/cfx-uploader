@@ -3,6 +3,7 @@ const path = require('node:path');
 const test = require('node:test');
 
 const {
+  CfxEmailLoginLinkInvalidError,
   CfxLoginRateLimitedError,
   configurePageFingerprint,
   createLaunchOptions,
@@ -68,6 +69,14 @@ test('configures coherent user-agent metadata and device metrics in normalized m
 test('accepts only exact CFX forum email-login links', async () => {
   assert.equal(normalizeEmailVerificationLink(VALID_EMAIL_LINK), VALID_EMAIL_LINK);
   assert.equal(await resolveEmailVerificationLink(async () => VALID_EMAIL_LINK, {}, 100), VALID_EMAIL_LINK);
+  assert.equal(
+    normalizeEmailVerificationLink(`${VALID_EMAIL_LINK}?source=email`),
+    `${VALID_EMAIL_LINK}?source=email`,
+  );
+  assert.equal(
+    normalizeEmailVerificationLink(`${VALID_EMAIL_LINK}/`),
+    `${VALID_EMAIL_LINK}/`,
+  );
 
   for (const invalid of [
     VALID_EMAIL_LINK.replace('https:', 'http:'),
@@ -86,6 +95,56 @@ test('redacts email-login tokens from diagnostic URLs', () => {
   assert.equal(
     sanitizeCfxUrl(VALID_EMAIL_LINK),
     'https://forum.cfx.re/session/email-login/[redacted]',
+  );
+  assert.equal(
+    sanitizeCfxUrl('https://portal.cfx.re/authenticate?payload=sensitive&signature=secret'),
+    'https://portal.cfx.re/authenticate',
+  );
+  assert.equal(
+    sanitizeCfxUrl('https://portal.cfx.re/login?return=%252Fassets%252Fcreated-assets'),
+    'https://portal.cfx.re/login',
+  );
+});
+
+test('fails immediately when an email-login link is consumed', async () => {
+  let phase = 'challenge';
+  const page = {
+    async evaluate(fn) {
+      const source = fn.toString();
+      if (source.includes('hasTwoFactor') && source.includes('pageText')) {
+        return {
+          hasTwoFactor: false,
+          twoFactorKind: null,
+          twoFactorSelector: null,
+          portalLoaded: false,
+          forumAuthenticated: false,
+          pageText: phase === 'challenge'
+            ? 'This is a new device or location.'
+            : 'Oops! The link you used no longer works. You can Log In now.',
+        };
+      }
+      return { title: 'Log In - Cfx Forum', headings: [], inputs: [], buttons: [] };
+    },
+    async goto() {
+      phase = 'consumed';
+    },
+    url() {
+      return VALID_EMAIL_LINK;
+    },
+  };
+
+  await assert.rejects(
+    waitForPasswordAuthStage({
+      page,
+      authTimeoutMs: 1000,
+      emailVerificationTimeoutMs: 1000,
+      emailVerificationLinkProvider: async () => VALID_EMAIL_LINK,
+    }),
+    (error) => (
+      error instanceof CfxEmailLoginLinkInvalidError &&
+      error.code === 'CFX_EMAIL_LOGIN_LINK_INVALID' &&
+      !error.message.includes('0123456789abcdef')
+    ),
   );
 });
 
@@ -249,6 +308,7 @@ function createTwoFactorPage({ autoSubmit, kind = 'password-login' }) {
             twoFactorKind: phase === '2fa' ? kind : null,
             twoFactorSelector: phase === '2fa' ? selector : null,
             portalLoaded: false,
+            forumAuthenticated: phase === 'forum',
             pageText: '',
           };
         }
@@ -318,13 +378,13 @@ test('waits for Portal hydration and clicks the SSO button exactly once', async 
           hasLoginButton: entryReads >= 2,
         };
       }
-      if (source.includes("querySelectorAll('button')") && source.includes('Created Assets')) {
+      if (source.includes('sign in with') && source.includes('button.click()')) {
         clicks += 1;
         phase = 'portal-ready';
         if (navigationResolve) navigationResolve();
         return true;
       }
-      if (source.includes('Created Assets')) {
+      if (source.includes('hasSelectedTab')) {
         return phase === 'portal-ready';
       }
       return false;
