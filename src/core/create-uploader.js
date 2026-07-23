@@ -36,6 +36,13 @@ function validatePasswordAuth(auth) {
   if (typeof auth.twoFactorCodeProvider !== 'function') {
     throw new Error('Upload auth.twoFactorCodeProvider is required for password authentication.');
   }
+
+  if (
+    auth.emailVerificationLinkProvider !== undefined &&
+    typeof auth.emailVerificationLinkProvider !== 'function'
+  ) {
+    throw new Error('Upload auth.emailVerificationLinkProvider must be a function when provided.');
+  }
 }
 
 function resolvePasskeySource(options = {}) {
@@ -54,17 +61,9 @@ function resolvePasskeySource(options = {}) {
   return null;
 }
 
-function validateUploadOptions(options) {
+function validateAuthenticationOptions(options) {
   if (!options || typeof options !== 'object') {
-    throw new Error('Upload options are required.');
-  }
-
-  if (!options.repository || typeof options.repository !== 'string') {
-    throw new Error('Upload option "repository" is required.');
-  }
-
-  if (!options.githubToken || typeof options.githubToken !== 'string') {
-    throw new Error('Upload option "githubToken" is required.');
+    throw new Error('Authentication options are required.');
   }
 
   if (options.auth !== undefined) {
@@ -86,6 +85,45 @@ function validateUploadOptions(options) {
     (!Number.isInteger(options.twoFactorTimeoutMs) || options.twoFactorTimeoutMs <= 0)
   ) {
     throw new Error('Upload option "twoFactorTimeoutMs" must be a positive integer when provided.');
+  }
+
+  if (
+    options.emailVerificationTimeoutMs !== undefined &&
+    (!Number.isInteger(options.emailVerificationTimeoutMs) || options.emailVerificationTimeoutMs <= 0)
+  ) {
+    throw new Error('Upload option "emailVerificationTimeoutMs" must be a positive integer when provided.');
+  }
+
+  if (
+    options.browserProfilePath !== undefined &&
+    options.browserProfilePath !== null &&
+    (typeof options.browserProfilePath !== 'string' || !options.browserProfilePath.trim())
+  ) {
+    throw new Error('Upload option "browserProfilePath" must be a non-empty string when provided.');
+  }
+
+  if (
+    options.headlessFingerprint !== undefined &&
+    options.headlessFingerprint !== 'native' &&
+    options.headlessFingerprint !== 'normalized'
+  ) {
+    throw new Error('Upload option "headlessFingerprint" must be "native" or "normalized" when provided.');
+  }
+
+  if (options.onLog !== undefined && typeof options.onLog !== 'function') {
+    throw new Error('Upload option "onLog" must be a function when provided.');
+  }
+}
+
+function validateUploadOptions(options) {
+  validateAuthenticationOptions(options);
+
+  if (!options.repository || typeof options.repository !== 'string') {
+    throw new Error('Upload option "repository" is required.');
+  }
+
+  if (!options.githubToken || typeof options.githubToken !== 'string') {
+    throw new Error('Upload option "githubToken" is required.');
   }
 
   if (
@@ -150,6 +188,9 @@ async function upload(options = {}) {
     sessionCachePath: options.sessionCachePath || null,
     sessionEncryptionKey: options.sessionEncryptionKey || null,
     twoFactorTimeoutMs: options.twoFactorTimeoutMs,
+    emailVerificationTimeoutMs: options.emailVerificationTimeoutMs,
+    browserProfilePath: options.browserProfilePath || null,
+    headlessFingerprint: options.headlessFingerprint || 'native',
     releasesDir: path.join(workDir, 'releases'),
     onLog,
     onProgress,
@@ -172,5 +213,7 @@ module.exports = {
   upload,
   resolveLibraryPasskey,
   resolvePasskeySource,
+  validateAuthenticationOptions,
   validatePasswordAuth,
+  validateUploadOptions,
 };

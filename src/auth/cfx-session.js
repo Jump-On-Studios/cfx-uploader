@@ -1,4 +1,4 @@
-const { authenticateToCfx } = require('./cfx-auth');
+const { authenticateToCfx, ensurePortalAuthenticated } = require('./cfx-auth');
 const {
   acquireSessionCacheLock,
   assertEncryptionKey,
@@ -32,12 +32,46 @@ async function validateCfxHttpSession(session) {
   await listAssets(session);
 }
 
-async function authenticateFreshSession(options) {
-  const authResult = await authenticateToCfx(options);
+async function authenticateFreshSession(options, dependencies = {}) {
+  const authenticate = dependencies.authenticateToCfx || authenticateToCfx;
+  const createSession = dependencies.createCfxHttpSession || createCfxHttpSession;
+  const validateSession = dependencies.validateCfxHttpSession || validateCfxHttpSession;
+  const completePortalSso = dependencies.ensurePortalAuthenticated || ensurePortalAuthenticated;
+  const onLog = typeof options.onLog === 'function' ? options.onLog : () => {};
+  const authResult = await authenticate({
+    ...options,
+    requirePortalPage: false,
+  });
 
   try {
-    const session = await createCfxHttpSession(authResult.page);
-    await validateCfxHttpSession(session);
+    onLog('CFX browser authentication complete. Validating the Portal API session directly.');
+    try {
+      const session = await createSession(authResult.page);
+      await validateSession(session);
+      onLog('CFX Portal API session validated without an additional SSO handoff.');
+
+      return {
+        session,
+        authMethod: authResult.authMethod,
+        sessionReused: false,
+      };
+    } catch (error) {
+      if (!isCfxAuthError(error)) {
+        throw error;
+      }
+    }
+
+    onLog('CFX Portal API session is unavailable. Completing one Portal SSO handoff.');
+    await completePortalSso({
+      page: authResult.page,
+      portalUrl: options.portalUrl,
+      authTimeoutMs: options.authTimeoutMs,
+      onLog,
+    });
+
+    const session = await createSession(authResult.page);
+    await validateSession(session);
+    onLog('CFX Portal API session validated after the SSO handoff.');
 
     return {
       session,
@@ -49,7 +83,7 @@ async function authenticateFreshSession(options) {
   }
 }
 
-async function resolveCfxHttpSession(options = {}) {
+async function resolveCfxHttpSession(options = {}, dependencies = {}) {
   const {
     headless = true,
     auth,
@@ -60,6 +94,10 @@ async function resolveCfxHttpSession(options = {}) {
     sessionEncryptionKey,
     authTimeoutMs,
     twoFactorTimeoutMs,
+    emailVerificationTimeoutMs,
+    browserProfilePath,
+    headlessFingerprint,
+    onLog,
   } = options;
 
   if (sessionCachePath) {
@@ -79,7 +117,8 @@ async function resolveCfxHttpSession(options = {}) {
         );
 
         try {
-          await validateCfxHttpSession(session);
+          const validateSession = dependencies.validateCfxHttpSession || validateCfxHttpSession;
+          await validateSession(session);
           return {
             session,
             authMethod: resolveAuthMethod(options),
@@ -103,7 +142,11 @@ async function resolveCfxHttpSession(options = {}) {
       portalUrl,
       authTimeoutMs,
       twoFactorTimeoutMs,
-    });
+      emailVerificationTimeoutMs,
+      browserProfilePath,
+      headlessFingerprint,
+      onLog,
+    }, dependencies);
 
     if (sessionCachePath) {
       await saveSessionCache(sessionCachePath, sessionEncryptionKey, freshSession.session);
@@ -116,6 +159,7 @@ async function resolveCfxHttpSession(options = {}) {
 }
 
 module.exports = {
+  authenticateFreshSession,
   isCfxAuthError,
   resolveAuthMethod,
   resolveCfxHttpSession,

@@ -21,7 +21,10 @@ function createCfxHttpSessionFromCookies(cookies, userAgent = 'Mozilla/5.0') {
   const cookieHeader = buildCookieHeader(cookies);
 
   if (!cookieHeader) {
-    throw new Error('No CFX cookies found after browser authentication');
+    const error = new Error('No Portal/API cookies found after browser authentication');
+    error.code = 'CFX_PORTAL_SESSION_UNAVAILABLE';
+    error.isCfxAuthError = true;
+    throw error;
   }
 
   return {
