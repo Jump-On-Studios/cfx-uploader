@@ -10,6 +10,7 @@
     "cfx-uploader-browser": "src/cli/browser-cli.js"
   },
   "files": [
+    ".env.example",
     "index.js",
     "src",
     "README.md",

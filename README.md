@@ -21,6 +21,7 @@ Temporary files are always cleaned up after a run, including failed runs: downlo
 
 - [Install](#install)
 - [Quick Start](#quick-start)
+- [Password Authentication](#password-authentication)
 - [Passkey Setup](#passkey-setup)
 - [Resource Configuration](#resource-configuration)
 - [Library Usage](#library-usage)
@@ -42,6 +43,12 @@ Temporary files are always cleaned up after a run, including failed runs: downlo
 
 ```bash
 npm install cfx-uploader
+```
+
+The package is CommonJS. The documentation uses ESM imports, but CommonJS applications can use:
+
+```js
+const { createUploader, checkAuthentication, upload } = require('cfx-uploader');
 ```
 
 Requirements:
@@ -87,48 +94,193 @@ await upload({
 });
 ```
 
-For password authentication, provide an asynchronous 2FA code provider. The provider can wait for a console, Discord workflow, webhook, or any other external input:
+For password authentication, configure asynchronous email-verification and 2FA providers. The providers can wait for a console, Discord workflow, webhook, or any other external input:
 
 ```js
-await upload({
-  repository: 'Jump-On-Studios/RedM-jo_housing',
-  releaseTag: 'v1.1.2',
+import path from 'node:path';
+import { createUploader } from 'cfx-uploader';
+
+const uploader = createUploader({
   githubToken: process.env.GITHUB_TOKEN,
   auth: {
     method: 'password',
     email: process.env.CFX_UPLOADER_EMAIL,
     password: process.env.CFX_UPLOADER_PASSWORD,
     emailVerificationLinkProvider: async ({ attempt, timeoutMs }) => {
-      console.log(`Waiting for the CFX email-login link (attempt ${attempt}, ${timeoutMs}ms timeout)`);
-      return await getEmailLoginLinkFromYourWorkflow();
+      return await getEmailLoginLinkFromYourWorkflow({ attempt, timeoutMs });
     },
     twoFactorCodeProvider: async ({ attempt, timeoutMs }) => {
-      console.log(`Waiting for CFX 2FA code (attempt ${attempt}, ${timeoutMs}ms timeout)`);
-      return await getCodeFromYourWorkflow();
+      return await getCodeFromYourWorkflow({ attempt, timeoutMs });
     },
   },
-  sessionCachePath: '/var/lib/cfx-uploader/cfx-session.enc',
+  sessionCachePath: path.resolve('.cfx-uploader/session.enc'),
   sessionEncryptionKey: process.env.CFX_UPLOADER_SESSION_KEY,
   twoFactorTimeoutMs: 10 * 60 * 1000,
   emailVerificationTimeoutMs: 10 * 60 * 1000,
-  browserProfilePath: '/var/lib/cfx-uploader/browser-profile',
-  headlessFingerprint: 'normalized',
+  browserProfilePath: path.resolve('.cfx-uploader/browser-profile'),
+  headless: true,
+});
+
+await uploader.upload({
+  repository: 'Jump-On-Studios/RedM-jo_housing',
+  releaseTag: 'v1.1.2',
 });
 ```
 
-The 2FA provider must return exactly six digits. The email provider must return an HTTPS `forum.cfx.re/session/email-login/<token>` link. Both values are treated as secrets and are never logged or stored. The link is opened in the same Chromium profile so that the resulting 2FA session belongs to the headless browser. An expired or already-consumed link fails immediately with error code `CFX_EMAIL_LOGIN_LINK_INVALID`; request a new link before restarting authentication.
+See [Password Authentication](#password-authentication) for the complete provider contracts, first-login flow, cache behavior, error codes, and production guidance.
 
 To validate authentication without downloading or uploading a release, run:
 
 ```bash
-npm run auth-check
+npx cfx-uploader-auth --auth-method=password
 ```
 
 The command uses the configured encrypted session cache first, then performs one fresh browser authentication when necessary.
 
+## Password Authentication
+
+Password authentication is supported by the public `upload()`, `createUploader()`, and `checkAuthentication()` APIs, and by the HTTP and authentication-check CLIs. It is not part of the legacy `uploadBrowser` flow.
+
+### Required configuration
+
+Library mode requires an `auth` object:
+
+```js
+const auth = {
+  method: 'password',
+  email: process.env.CFX_UPLOADER_EMAIL,
+  password: process.env.CFX_UPLOADER_PASSWORD,
+
+  async emailVerificationLinkProvider({ attempt, timeoutMs }) {
+    return await waitForCfxEmailLoginLink({ attempt, timeoutMs });
+  },
+
+  async twoFactorCodeProvider({ attempt, timeoutMs }) {
+    return await waitForCfxTwoFactorCode({ attempt, timeoutMs });
+  },
+};
+```
+
+Provider contracts:
+
+| Provider | When called | Required return value |
+|---|---|---|
+| `emailVerificationLinkProvider` | Once when CFX reports a new device or location. Strongly recommended for headless and server environments. | An HTTPS URL on the exact hostname `forum.cfx.re`, with path `/session/email-login/<32 hexadecimal characters>`. A query string or trailing slash is accepted; credentials and fragments are rejected. |
+| `twoFactorCodeProvider` | Once after either supported CFX 2FA screen becomes visible. | A string containing exactly six digits. |
+
+Providers may remain pending while another process collects input from a private Discord interaction, admin UI, secret inbox integration, or terminal. They must not retry the CFX login themselves. The package controls the browser transition and calls each provider at most once per authentication attempt.
+
+`emailVerificationLinkProvider` is technically optional because known browsers may go directly from password login to 2FA. In production, configure it anyway: CFX can require email verification whenever it considers the Chromium profile a new device or location.
+
+### Browser flow
+
+A fresh password authentication follows these states:
+
+1. Open CFX Portal and enter the Forum SSO handoff.
+2. Fill the visible modern Forum password form and submit it once.
+3. Stop immediately if CFX reports a login rate limit.
+4. If CFX reports a new device or location, request one email-login link and open it in the same Chromium page.
+5. Reject an expired or already-consumed email link without retrying it.
+6. Detect either the classic password-login 2FA form or the email-link 2FA form.
+7. Request one six-digit code and submit the owning form once.
+8. Require an authenticated Forum or Portal DOM state.
+9. Validate the session with `GET /v1/me/assets`.
+10. If Portal cookies are not ready or the API returns `401`/`403`, perform one Portal SSO handoff and validate once more.
+11. Write the encrypted session cache only after API validation succeeds.
+
+The browser may briefly display an unrecognized empty Forum shell between opening the email link and rendering the 2FA form. The workflow keeps observing DOM state and does not treat that transient page as success.
+
+### Session cache and browser profile
+
+For unattended use, configure both an encrypted session cache and a persistent Chromium profile:
+
+```js
+const uploader = createUploader({
+  githubToken: process.env.GITHUB_TOKEN,
+  auth,
+  sessionCachePath: '/var/lib/cfx-uploader/session.enc',
+  sessionEncryptionKey: process.env.CFX_UPLOADER_SESSION_KEY,
+  browserProfilePath: '/var/lib/cfx-uploader/chromium-profile',
+  headless: true,
+});
+```
+
+- `sessionCachePath` stores encrypted CFX cookies and their User-Agent. No cache is created when this option is omitted.
+- `sessionEncryptionKey` is required whenever a cache path is configured.
+- `browserProfilePath` preserves the browser identity CFX saw during fresh authentication. It does not replace the encrypted session cache.
+- Use one cache path and one browser profile per CFX account and environment.
+- Do not run multiple unrelated accounts against the same paths.
+
+Use a high-entropy cache key from your secret manager. For example:
+
+```bash
+openssl rand -base64 32
+```
+
+On every run, the cache is decrypted and validated against the CFX API. A valid cache skips Puppeteer and sets `sessionReused: true`; `checkAuthentication()` reports `authMethod: 'cached'`, while an upload may retain the configured fresh-auth method in `authMethod`. An authentication `401`/`403` invalidates the cache and starts one fresh browser authentication. Other API and network failures are surfaced without deleting a potentially valid cache.
+
+### Authentication check
+
+Validate credentials and refresh the cache without downloading a GitHub release:
+
+```js
+import { checkAuthentication } from 'cfx-uploader';
+
+const result = await checkAuthentication({
+  auth,
+  sessionCachePath: '/var/lib/cfx-uploader/session.enc',
+  sessionEncryptionKey: process.env.CFX_UPLOADER_SESSION_KEY,
+  browserProfilePath: '/var/lib/cfx-uploader/chromium-profile',
+  headless: true,
+});
+
+console.log(result);
+// Fresh login: { authMethod: 'password', sessionReused: false }
+// Valid cache: { authMethod: 'cached', sessionReused: true }
+```
+
+For an interactive terminal:
+
+```bash
+npx cfx-uploader-auth --auth-method=password
+```
+
+The CLI reads password configuration from environment variables and supplies console providers for both the email-login link and six-digit 2FA code. It requires a real TTY when fresh authentication needs either value.
+
+### Production checklist
+
+- Keep the password, session encryption key, email-login link, and 2FA code in private secret or interaction channels.
+- Persist writable cache and Chromium-profile directories across process restarts.
+- Give each CFX account/environment its own cache and profile paths.
+- Implement both asynchronous providers even if a known browser currently skips email verification.
+- Set provider timeouts long enough for the operator or external workflow to respond.
+- Run `checkAuthentication()` during deployment or operational checks, before handling a release event.
+- Handle the stable error codes below without automatic login retries.
+
+### Password authentication errors
+
+Errors are thrown without automatic password retries. Check `error.code` for stable authentication conditions:
+
+```js
+try {
+  await uploader.upload({ repository, releaseTag });
+} catch (error) {
+  if (error.code === 'CFX_LOGIN_RATE_LIMITED') {
+    // Wait for the CFX cooldown. Do not retry immediately.
+  } else if (error.code === 'CFX_EMAIL_LOGIN_LINK_INVALID') {
+    // Ask the user for a newly generated link, then start a new authentication.
+  } else if (error.code === 'CFX_EMAIL_VERIFICATION_TIMEOUT') {
+    // The email challenge was not completed before the configured timeout.
+  }
+  throw error;
+}
+```
+
+Never include the email-login URL, password, 2FA code, cookies, or cache contents in application logs. The package sanitizes diagnostic URLs to `origin + pathname` and redacts every `/session/email-login/<token>` path.
+
 ## Passkey Setup
 
-Passkey registration is required only when using the default/passkey authentication mode. Password mode uses the CFX username, password, and asynchronous 2FA provider instead.
+Passkey registration is required only when using the default/passkey authentication mode. Password mode uses the CFX email/username, password, asynchronous email-link provider, and asynchronous 2FA provider instead.
 
 The passkey registration script is based on work by [ilovehugetits/9am-build](https://github.com/ilovehugetits/9am-build). Thanks for the original implementation.
 
@@ -254,6 +406,36 @@ await uploader.upload({
 });
 ```
 
+Base options and per-upload options are shallow-merged. Keep authentication, cache, GitHub token, logging, and working-directory settings in `createUploader()`, then pass repository- and release-specific values to `uploader.upload()`.
+
+### `checkAuthentication()`
+
+Use `checkAuthentication()` to validate or refresh a CFX session without downloading a GitHub release or creating an asset version:
+
+```js
+import { checkAuthentication } from 'cfx-uploader';
+
+const result = await checkAuthentication({
+  auth,
+  sessionCachePath,
+  sessionEncryptionKey,
+  browserProfilePath,
+  headless: true,
+  onLog: console.log,
+});
+```
+
+It returns only:
+
+```js
+{
+  authMethod: 'cached',
+  sessionReused: true
+}
+```
+
+`checkAuthentication()` uses the same cache validation, fresh browser authentication, Portal handoff, timeouts, and password providers as `upload()`.
+
 ### Minimal webhook example
 
 This example mirrors a common release-webhook integration: upload the published GitHub release to CFX, keep at most 2 prerelease versions, and expose the deleted CFX version for a private team notification.
@@ -305,15 +487,15 @@ export async function handleGithubReleaseWebhook(payload) {
 | `repository` | yes | GitHub repository in `owner/name` format. |
 | `releaseTag` | recommended | GitHub release tag to upload. If omitted, the latest release is used. |
 | `githubToken` | yes | GitHub token used to read releases and download archives. |
-| `passkey` | conditional | Passkey credential object for the default/passkey mode. Not needed with `auth.method: 'password'`. |
+| `passkey` | conditional | Passkey credential object for the default/passkey mode. Required when neither password `auth` nor a reusable session cache is supplied. |
 | `passkeyJson` | no | Alternative JSON string form of the passkey credential. |
-| `auth` | no | Password authentication object with `method`, `email`, `password`, `twoFactorCodeProvider`, and optional `emailVerificationLinkProvider`. |
+| `auth` | conditional | Password authentication object with `method: 'password'`, `email`, `password`, `twoFactorCodeProvider`, and a strongly recommended `emailVerificationLinkProvider`. Alternative to passkey credentials. |
 | `headless` | no | Browser auth mode. Defaults to `true`. |
 | `browserProfilePath` | no | Persistent Chromium user-data directory used to preserve the recognized browser identity. |
 | `headlessFingerprint` | no | `native` (default) or `normalized` for coherent UA, Client Hints, viewport, and screen metrics. |
 | `workDir` | no | Working directory for temporary files. Defaults to an OS temp folder. |
 | `sessionCachePath` | no | Explicit path for the encrypted CFX session cache. No cache is used when omitted. |
-| `sessionEncryptionKey` | no | Secret used to encrypt the session cache. Required with `sessionCachePath`. |
+| `sessionEncryptionKey` | conditional | Secret used to encrypt the session cache. Required with `sessionCachePath`. |
 | `twoFactorTimeoutMs` | no | Maximum time to wait for the 2FA provider. Defaults to 10 minutes. |
 | `emailVerificationTimeoutMs` | no | Maximum time to wait for CFX new-device email verification. Defaults to 10 minutes. |
 | `releaseCandidate` | no | Overrides GitHub pre-release detection. |
@@ -362,7 +544,7 @@ The library returns a structured result on success:
 }
 ```
 
-`authMethod` is `password`, `passkey`, or `cached`. `sessionReused` is `true` when the authenticated session came from the encrypted cache.
+`authMethod` is `password`, `passkey`, or `cached`. Because uploads retain the configured authentication source when available, use `sessionReused`—not `authMethod` alone—to determine whether Puppeteer was skipped in favor of the encrypted cache.
 
 `deletedVersion` is `null` unless `deleteOldestVersionWhenCapped` was enabled and CFX Uploader had to delete a capped asset version before retrying the upload.
 
@@ -396,6 +578,7 @@ After installing the package, the CLI commands are available through `npx`:
 
 ```bash
 npx cfx-uploader-register-passkey
+npx cfx-uploader-auth
 npx cfx-uploader-http
 npx cfx-uploader-browser
 ```
@@ -406,13 +589,13 @@ When working inside this repository, install dependencies first:
 npm install
 ```
 
-Create a local `.env`:
+The commands read configuration from `process.env`, so inject production values through your shell, service manager, container platform, or secret manager. The authentication-check command additionally loads `.env` from the current working directory:
 
 ```env
 GITHUB_TOKEN=your_github_token
 ```
 
-Use `.env.example` as a template for all supported variables.
+Use the published `.env.example` as a template. Do not depend on a consumer-project `.env` being auto-loaded by the upload CLI; either export those variables before invoking it or load them in the parent process.
 
 Local CLI runs use:
 
@@ -456,15 +639,32 @@ CFX_UPLOADER_PASSWORD=your_password
 CFX_UPLOADER_SESSION_CACHE_PATH=/var/lib/cfx-uploader/cfx-session.enc
 CFX_UPLOADER_SESSION_KEY=your_secret_manager_key
 CFX_UPLOADER_2FA_TIMEOUT_MS=600000
+CFX_UPLOADER_EMAIL_VERIFICATION_TIMEOUT_MS=600000
+CFX_UPLOADER_BROWSER_PROFILE_PATH=/var/lib/cfx-uploader/browser-profile
+CFX_UPLOADER_HEADLESS_FINGERPRINT=native
 ```
 
-Then run:
+Validate and populate the session cache before the first upload:
 
 ```bash
-npx cfx-uploader-http
+npx cfx-uploader-auth --auth-method=password
 ```
 
-The CLI asks for the six-digit 2FA code only when the cache is missing or invalid. You can also select the method explicitly with `--auth-method=password` or `--auth-method=passkey`.
+Then upload:
+
+```bash
+npx cfx-uploader-http --auth-method=password
+```
+
+On a fresh password login, the CLI may first ask for the email-login link sent by CFX and then for the six-digit authenticator code. These prompts appear only when required by the CFX browser state. When the encrypted cache remains valid, authentication completes without launching Chromium or prompting for either value.
+
+Use `--show-browser` to debug a fresh login:
+
+```bash
+npx cfx-uploader-auth --auth-method=password --show-browser
+```
+
+The interactive providers require stdin and stdout connected to a TTY. For services, containers without an interactive terminal, webhooks, and Discord bots, use the library API and provide asynchronous providers instead.
 
 Control capped-version cleanup:
 
@@ -478,7 +678,7 @@ npx cfx-uploader-http --no-prerelease-retention
 ### Browser Mode
 
 Browser mode drives the full CFX Portal UI with Puppeteer. It is useful for debugging portal changes.
-It remains dedicated to the existing passkey flow; username/password authentication and session caching are available through the library and HTTP CLI.
+It remains dedicated to the existing passkey flow; username/password authentication and session caching are available through the library, HTTP CLI, and authentication-check CLI.
 
 ```bash
 npx cfx-uploader-browser
@@ -608,21 +808,21 @@ Recommended server-side variables:
 
 | Variable | Required | Description |
 |---|---:|---|
-| `GITHUB_TOKEN` | yes | GitHub token used by your integration code. |
+| `GITHUB_TOKEN` | conditional | GitHub token used by uploads. It is not required by `checkAuthentication()` or `cfx-uploader-auth`. |
 | `CFX_UPLOADER_CREDENTIAL_ID` | conditional | Passkey credential id. Required for passkey mode. |
 | `CFX_UPLOADER_RP_ID` | conditional | Usually `forum.cfx.re`; required for passkey mode. |
 | `CFX_UPLOADER_PRIVATE_KEY` | conditional | Passkey private key; required for passkey mode. |
 | `CFX_UPLOADER_USER_HANDLE` | conditional | Passkey user handle; required for passkey mode. |
 | `CFX_UPLOADER_SIGN_COUNT` | conditional | Passkey sign count as a number; required for passkey mode. |
-| `CFX_UPLOADER_AUTH_METHOD` | no | HTTP CLI authentication method: `passkey` (default) or `password`. |
+| `CFX_UPLOADER_AUTH_METHOD` | no | Authentication method for `cfx-uploader-http` and `cfx-uploader-auth`: `passkey` (default) or `password`. An explicit `--auth-method` flag takes precedence. |
 | `CFX_UPLOADER_EMAIL` | conditional | CFX email; required for password mode. |
 | `CFX_UPLOADER_PASSWORD` | conditional | CFX password; required for password mode. |
 | `CFX_UPLOADER_SESSION_CACHE_PATH` | no | Explicit encrypted CFX session cache path. |
-| `CFX_UPLOADER_SESSION_KEY` | no | Encryption secret for the CFX session cache. |
+| `CFX_UPLOADER_SESSION_KEY` | conditional | Encryption secret required whenever `CFX_UPLOADER_SESSION_CACHE_PATH` is set. |
 | `CFX_UPLOADER_2FA_TIMEOUT_MS` | no | CLI 2FA provider timeout in milliseconds. Defaults to `600000`. |
 | `CFX_UPLOADER_EMAIL_VERIFICATION_TIMEOUT_MS` | no | CLI email-link provider timeout in milliseconds. Defaults to `600000`. |
-| `CFX_UPLOADER_BROWSER_PROFILE_PATH` | no | Persistent Chromium profile path used by fresh browser authentication. |
-| `CFX_UPLOADER_HEADLESS_FINGERPRINT` | no | `native` (default) or `normalized`. |
+| `CFX_UPLOADER_BROWSER_PROFILE_PATH` | no | Persistent Chromium profile directory used by fresh browser authentication. Recommended for password mode. |
+| `CFX_UPLOADER_HEADLESS_FINGERPRINT` | no | `native` (default) or `normalized`. Start with `native`; use `normalized` only when the deployment needs the normalized Chromium metadata profile. |
 | `CFX_UPLOADER_WORKDIR` | no | Optional persistent working directory for integrations. |
 
 CLI-only variables:
@@ -638,9 +838,13 @@ CLI-only variables:
 
 - Never commit `passkey-credential.json`.
 - Never log passkey values, GitHub tokens, or Discord webhook URLs.
-- Never log passwords, 2FA codes, CFX cookies, or session-cache contents.
+- Never log passwords, email-login URLs, 2FA codes, CFX cookies, or session-cache contents.
 - Store production passkey values in a secret manager or private server environment.
+- Store `CFX_UPLOADER_EMAIL` and `CFX_UPLOADER_PASSWORD` in a secret manager. Do not embed them in source code.
 - Store `CFX_UPLOADER_SESSION_KEY` in a secret manager and use one session-cache path per CFX account/environment.
+- Restrict filesystem access to the session cache and persistent Chromium profile even though the session cache itself is encrypted.
+- The interactive CLI uses normal terminal prompts, so typed email-login links and 2FA codes may be visible in terminal capture, scrollback, or copied output. Use library providers backed by private interactions for production automation.
+- Diagnostic URLs omit query strings and redact email-login token paths. Application callbacks must apply the same rule to their own logs.
 - Use the narrowest GitHub token scope that can read the target repository releases.
 - Treat `deleteOldestVersionWhenCapped` as destructive and enable it per asset only when acceptable.
 - Customer-facing notifications should not expose raw upload errors.
@@ -649,20 +853,27 @@ CLI-only variables:
 
 `upload()` throws on failure. In integrations such as Nuxt webhooks, catch the error and forward `error.message` to private logs or a private Discord channel. Do not expose these messages in customer-facing notifications.
 
+Stable password-authentication conditions are exposed through `error.code`; the code is not necessarily repeated in `error.message`.
+
 Common errors:
 
-| Area | Error message pattern | Meaning |
+| Area | Error or code | Meaning |
 |---|---|---|
 | Library options | `Upload options are required.` | `upload()` was called without an options object. |
 | Library options | `Upload option "repository" is required.` | The GitHub repository was not provided. |
 | Library options | `Upload option "githubToken" is required.` | The GitHub token was not provided. |
 | Passkey | `Missing CFX passkey. Provide passkey or passkeyJson.` | No CFX passkey was provided to the library. |
 | Passkey | `Invalid passkey: ...` | One passkey field is missing or invalid. |
-| Password auth | `Password authentication requires ...` | Username, password, or an asynchronous 2FA provider is missing. |
+| Password auth | `Upload auth...` / `Password authentication requires ...` | Email, password, or an asynchronous 2FA provider is missing or invalid. |
+| Password auth | `CFX email verification link is not an allowed...` | The email provider returned a URL that failed the strict HTTPS, hostname, path, token, credentials, or fragment validation. |
+| Password auth | `CFX email verification link provider failed.` | The external email-link provider rejected or failed. Its underlying error is intentionally not exposed. |
+| Password auth | `CFX_EMAIL_VERIFICATION_TIMEOUT` | The new-device email challenge or its provider was not completed before `emailVerificationTimeoutMs`. No password retry is performed. |
 | Password auth | `CFX 2FA provider must return exactly six digits.` | The external 2FA provider returned an invalid value. |
 | Password auth | `CFX 2FA code provider timed out.` | No 2FA code was supplied before the configured timeout. |
 | Password auth | `CFX_EMAIL_LOGIN_LINK_INVALID` | The supplied email-login link is expired, already consumed, or invalid. Request a new link and restart authentication. |
 | Password auth | `CFX_LOGIN_RATE_LIMITED` | CFX is throttling login attempts. Wait for the cooldown; the library does not retry automatically. |
+| Password auth | `CFX password login button #login-button was not found or was not actionable.` | The current Forum password DOM no longer matches the supported modern form, or the button is hidden/disabled. Retry with `headless: false` and report the sanitized page state. |
+| Password auth | `CFX 2FA submission did not reach an authenticated Forum or Portal state.` | CFX rejected the code or the post-submit DOM did not reach a supported authenticated state. The package does not click a second time. |
 | Session cache | `CFX session cache requires ...` | A cache path was configured without an encryption key. |
 | Session cache | `Unable to decrypt CFX session cache...` | The cache key is wrong or the encrypted file is corrupted. |
 | GitHub release | `No downloadable release found for ...` | The release/tag could not be found or has no downloadable archive. |
@@ -677,9 +888,9 @@ Common errors:
 | ZIP metadata | `ZIP metadata missing: no fxmanifest.lua found...` | The final ZIP does not contain an `fxmanifest.lua`. |
 | ZIP metadata | `ZIP metadata missing: no version detected...` | The manifest does not expose a readable version. |
 | Version check | release/manifest version mismatch | The GitHub release tag and `fxmanifest.lua` version differ, ignoring only a leading `v`. |
-| CFX auth | `Portal failed to load (timeout), last URL: ...` | Browser password/passkey auth or portal redirect did not reach the created-assets page. |
+| CFX auth | `CFX Portal ... did not reach Created Assets. State: ...` | Browser authentication or the single Portal SSO handoff did not reach a visible authenticated Portal state. |
 | CFX auth | Puppeteer/WebAuthn errors | Chromium failed to launch, inject the virtual authenticator, or complete navigation. |
-| CFX session | `No CFX cookies found after browser authentication` | Browser auth completed without usable CFX API cookies. |
+| CFX session | `No Portal/API cookies found after browser authentication` | Browser auth completed without usable CFX API cookies. |
 | CFX session | `CFX HTTP auth failed (401/403): ...` | `portal-api.cfx.re` rejected the authenticated session. |
 | CFX API | `GET/POST https://portal-api.cfx.re/... failed (...): ...` | A CFX API endpoint returned a non-2xx response. |
 | CFX API | `Invalid JSON response from ...` | CFX returned non-JSON where JSON was expected. |
