@@ -5,6 +5,7 @@ const test = require('node:test');
 const {
   CfxEmailLoginLinkInvalidError,
   CfxLoginRateLimitedError,
+  authenticateWithPassword,
   configurePageFingerprint,
   createLaunchOptions,
   ensurePortalAuthenticated,
@@ -412,6 +413,46 @@ test('waits for Portal hydration and clicks the SSO button exactly once', async 
   assert.equal(entryReads, 2);
   assert.equal(clicks, 1);
   assert.match(logs.join('\n'), /SSO handoff started/);
+});
+
+test('defers a stable Created Assets route without recognized DOM to Portal API validation', async () => {
+  const logs = [];
+  let twoFactorProviderCalls = 0;
+  const page = {
+    async goto() {},
+    async evaluate(fn) {
+      const source = fn.toString();
+      if (source.includes('hasLoginButton') && source.includes('portalLoaded')) {
+        return {
+          portalLoaded: false,
+          hasLoginButton: false,
+          loginButtonDisabled: false,
+        };
+      }
+      throw new Error('Unexpected page evaluation.');
+    },
+    url() {
+      return 'https://portal.cfx.re/assets/created-assets';
+    },
+  };
+
+  await authenticateWithPassword({
+    page,
+    portalUrl: 'https://portal.cfx.re/assets/created-assets',
+    authTimeoutMs: 50,
+    auth: {
+      email: 'test@example.test',
+      password: 'test-password',
+      twoFactorCodeProvider: async () => {
+        twoFactorProviderCalls += 1;
+        return '123456';
+      },
+    },
+    onLog: (message) => logs.push(message),
+  });
+
+  assert.equal(twoFactorProviderCalls, 0);
+  assert.match(logs.join('\n'), /deferring authentication validation to the Portal API/i);
 });
 
 test('fails immediately when CFX reports a login rate limit', async () => {

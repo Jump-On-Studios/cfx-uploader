@@ -16,6 +16,7 @@ const DEFAULT_TWO_FACTOR_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_EMAIL_VERIFICATION_TIMEOUT_MS = 10 * 60 * 1000;
 const EMAIL_VERIFICATION_POLL_INTERVAL_MS = 2000;
 const TWO_FACTOR_AUTO_SUBMIT_GRACE_MS = 1000;
+const PORTAL_ROUTE_STABILITY_MS = 2000;
 const NORMALIZED_VIEWPORT = { width: 1280, height: 800 };
 const NORMALIZED_SCREEN = { width: 1920, height: 1080 };
 const EMAIL_LOGIN_PATH_PATTERN = /^\/session\/email-login\/[a-f0-9]{32}\/?$/i;
@@ -275,9 +276,20 @@ async function isPortalLoaded(page) {
     .catch(() => false);
 }
 
+function isPortalCreatedAssetsRoute(page) {
+  try {
+    const url = new URL(page.url());
+    return url.origin === 'https://portal.cfx.re' && url.pathname === '/assets/created-assets';
+  } catch {
+    return false;
+  }
+}
+
 async function waitForPortalLoaded(options) {
   const { page, timeoutMs = 30000 } = options;
   const deadline = Date.now() + timeoutMs;
+  const routeStabilityMs = Math.min(PORTAL_ROUTE_STABILITY_MS, Math.max(0, timeoutMs / 2));
+  let routeReachedAt = null;
 
   while (Date.now() < deadline) {
     const hasCreatedAssets = await isPortalLoaded(page);
@@ -285,10 +297,18 @@ async function waitForPortalLoaded(options) {
     if (hasCreatedAssets) {
       return true;
     }
+    if (isPortalCreatedAssetsRoute(page)) {
+      routeReachedAt ??= Date.now();
+      if (Date.now() - routeReachedAt >= routeStabilityMs) {
+        return true;
+      }
+    } else {
+      routeReachedAt = null;
+    }
     await sleep(500);
   }
 
-  return false;
+  return isPortalCreatedAssetsRoute(page);
 }
 
 /**
@@ -393,18 +413,32 @@ async function readPortalEntryState(page) {
   }).catch(() => ({ portalLoaded: false, hasLoginButton: false, loginButtonDisabled: false }));
 }
 
-async function waitForPortalEntryState(page, timeoutMs) {
+async function waitForPortalEntryState(page, timeoutMs, options = {}) {
+  const { allowCreatedAssetsRoute = false } = options;
   const deadline = Date.now() + timeoutMs;
+  const routeStabilityMs = Math.min(PORTAL_ROUTE_STABILITY_MS, Math.max(0, timeoutMs / 2));
   let lastState = { portalLoaded: false, hasLoginButton: false, loginButtonDisabled: false };
+  let routeReachedAt = null;
   while (Date.now() < deadline) {
     const state = await readPortalEntryState(page);
     lastState = state;
     if (state.portalLoaded || (state.hasLoginButton && !state.loginButtonDisabled)) {
       return state;
     }
+    if (allowCreatedAssetsRoute && isPortalCreatedAssetsRoute(page)) {
+      routeReachedAt ??= Date.now();
+      if (Date.now() - routeReachedAt >= routeStabilityMs) {
+        return { ...state, createdAssetsRouteReached: true };
+      }
+    } else {
+      routeReachedAt = null;
+    }
     await sleep(250);
   }
-  return lastState;
+  return {
+    ...lastState,
+    createdAssetsRouteReached: allowCreatedAssetsRoute && isPortalCreatedAssetsRoute(page),
+  };
 }
 
 async function readPasswordLoginEntryState(page) {
@@ -1062,8 +1096,14 @@ async function authenticateWithPassword(options) {
 
   await page.goto(portalUrl, { waitUntil: 'load' });
 
-  const portalEntryState = await waitForPortalEntryState(page, authTimeoutMs);
+  const portalEntryState = await waitForPortalEntryState(page, authTimeoutMs, {
+    allowCreatedAssetsRoute: true,
+  });
   if (portalEntryState.portalLoaded) {
+    return;
+  }
+  if (portalEntryState.createdAssetsRouteReached) {
+    onLog('CFX Portal Created Assets route reached without a recognized DOM state. Deferring authentication validation to the Portal API.');
     return;
   }
   if (portalEntryState.loginButtonDisabled) {
