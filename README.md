@@ -635,7 +635,7 @@ To use username/password authentication from the CLI:
 ```env
 CFX_UPLOADER_AUTH_METHOD=password
 CFX_UPLOADER_EMAIL=your_email
-CFX_UPLOADER_PASSWORD=your_password
+CFX_UPLOADER_PASSWORD="your_password"
 CFX_UPLOADER_SESSION_CACHE_PATH=/var/lib/cfx-uploader/cfx-session.enc
 CFX_UPLOADER_SESSION_KEY=your_secret_manager_key
 CFX_UPLOADER_2FA_TIMEOUT_MS=600000
@@ -643,6 +643,8 @@ CFX_UPLOADER_EMAIL_VERIFICATION_TIMEOUT_MS=600000
 CFX_UPLOADER_BROWSER_PROFILE_PATH=/var/lib/cfx-uploader/browser-profile
 CFX_UPLOADER_HEADLESS_FINGERPRINT=native
 ```
+
+Quote the password in `.env` when it contains `#` (for example, `CFX_UPLOADER_PASSWORD="abc#123"`). The CLI also preserves an unquoted `#` in this specific password variable.
 
 Validate and populate the session cache before the first upload:
 
