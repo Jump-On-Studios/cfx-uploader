@@ -455,6 +455,70 @@ test('defers a stable Created Assets route without recognized DOM to Portal API 
   assert.match(logs.join('\n'), /deferring authentication validation to the Portal API/i);
 });
 
+test('defers Created Assets reached after the Portal login handoff to API validation', async () => {
+  const logs = [];
+  let phase = 'portal-login';
+  let portalLoginClicks = 0;
+  let twoFactorProviderCalls = 0;
+  const page = {
+    async goto() {
+      phase = 'portal-login';
+    },
+    async evaluate(fn) {
+      const source = fn.toString();
+      if (source.includes('hasLoginButton') && source.includes('portalLoaded')) {
+        return {
+          portalLoaded: false,
+          hasLoginButton: phase === 'portal-login',
+          loginButtonDisabled: false,
+        };
+      }
+      if (source.includes('sign in with') && source.includes('button.click()')) {
+        portalLoginClicks += 1;
+        phase = 'created-assets-shell';
+        return true;
+      }
+      if (source.includes('hasPasswordForm') && source.includes('forumAuthenticated')) {
+        return {
+          portalLoaded: false,
+          hasPasswordForm: false,
+          forumAuthenticated: false,
+          hasNewTopicButton: false,
+        };
+      }
+      throw new Error('Unexpected page evaluation.');
+    },
+    waitForNavigation() {
+      return Promise.resolve();
+    },
+    url() {
+      return phase === 'created-assets-shell'
+        ? 'https://portal.cfx.re/assets/created-assets'
+        : 'https://portal.cfx.re/login';
+    },
+  };
+
+  await authenticateWithPassword({
+    page,
+    portalUrl: 'https://portal.cfx.re/assets/created-assets',
+    authTimeoutMs: 50,
+    auth: {
+      email: 'test@example.test',
+      password: 'test-password',
+      twoFactorCodeProvider: async () => {
+        twoFactorProviderCalls += 1;
+        return '123456';
+      },
+    },
+    onLog: (message) => logs.push(message),
+  });
+
+  assert.equal(portalLoginClicks, 1);
+  assert.equal(twoFactorProviderCalls, 0);
+  assert.match(logs.join('\n'), /after the login handoff/i);
+  assert.match(logs.join('\n'), /deferring authentication validation to the Portal API/i);
+});
+
 test('fails immediately when CFX reports a login rate limit', async () => {
   let reloads = 0;
   const page = {

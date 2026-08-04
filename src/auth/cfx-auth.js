@@ -485,10 +485,20 @@ async function readPasswordLoginEntryState(page) {
 
 async function waitForPasswordLoginEntryState(page, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
+  const routeStabilityMs = Math.min(PORTAL_ROUTE_STABILITY_MS, Math.max(0, timeoutMs / 2));
+  let routeReachedAt = null;
   while (Date.now() < deadline) {
     const state = await readPasswordLoginEntryState(page);
     if (state.portalLoaded || state.hasPasswordForm || state.forumAuthenticated) {
       return state;
+    }
+    if (isPortalCreatedAssetsRoute(page)) {
+      routeReachedAt ??= Date.now();
+      if (Date.now() - routeReachedAt >= routeStabilityMs) {
+        return { ...state, createdAssetsRouteReached: true };
+      }
+    } else {
+      routeReachedAt = null;
     }
     await sleep(250);
   }
@@ -497,6 +507,7 @@ async function waitForPasswordLoginEntryState(page, timeoutMs) {
     hasPasswordForm: false,
     forumAuthenticated: false,
     hasNewTopicButton: false,
+    createdAssetsRouteReached: isPortalCreatedAssetsRoute(page),
   };
 }
 
@@ -1137,6 +1148,10 @@ async function authenticateWithPassword(options) {
 
   const loginEntryState = await waitForPasswordLoginEntryState(page, authTimeoutMs);
   if (loginEntryState.portalLoaded) {
+    return;
+  }
+  if (loginEntryState.createdAssetsRouteReached) {
+    onLog('CFX Portal Created Assets route reached after the login handoff without a recognized DOM state. Deferring authentication validation to the Portal API.');
     return;
   }
   if (loginEntryState.forumAuthenticated) {
