@@ -275,7 +275,6 @@ async function runHttpUploadFlow(options) {
       deleteOldestVersionWhenCapped: resolvedDeleteOldestVersionWhenCapped,
       maxPrereleaseVersionsToKeep: resolvedMaxPrereleaseVersionsToKeep,
       onUploadProgress: async (uploadProgress) => {
-        log(`Upload progress: ${uploadProgress.percent}% (chunk ${uploadProgress.chunkIndex}/${uploadProgress.chunkCount})`, uploadProgress);
         await progress({
           step: 'upload-cfx',
           label: `Uploading to CFX: ${uploadProgress.percent}%`,
@@ -298,15 +297,15 @@ async function runHttpUploadFlow(options) {
         log('\nStep 7/7: Waiting for CFX to finalize the version');
       },
       onFinalizePoll: async (pollStatus) => {
-        const versionState = pollStatus.latestVersion?.state || 'pending';
+        const versionState = pollStatus.latestVersion?.state || pollStatus.state || 'pending';
         const elapsedSeconds = Math.round(pollStatus.elapsedMs / 1000);
-        const stateSummary = pollStatus.requestTimedOut
-          ? 'CFX status request timed out, retrying'
-          : `CFX state: asset=${pollStatus.state || 'unknown'}, version=${versionState}, chunks=${pollStatus.chunk_status || 'n/a'}`;
-        log(`${stateSummary} (${elapsedSeconds}s)`, pollStatus);
+        const statusLabel = pollStatus.requestTimedOut
+          ? `Checking status: request timed out, retrying (${elapsedSeconds}s)`
+          : `Checking status: "${versionState}" (${elapsedSeconds}s)`;
+        log(statusLabel, pollStatus);
         await progress({
           step: 'finalize-cfx',
-          label: `${stateSummary} (${elapsedSeconds}s)`,
+          label: statusLabel,
           index: 7,
           total: 7,
           meta: { ...pollStatus, version: metadata.version },
