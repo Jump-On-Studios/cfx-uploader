@@ -521,6 +521,8 @@ await upload({
 });
 ```
 
+During step 6 (`upload-cfx`), upload progress events are emitted every 5% of sent bytes with `meta.percent`, `meta.chunkIndex`, `meta.chunkCount`, `meta.uploadedBytes` and `meta.totalBytes`. Step 7 (`finalize-cfx`) covers the complete-upload call and the wait for CFX to mark the version `active`; each poll emits an event with `meta.state`, `meta.latestVersion` and `meta.elapsedMs`.
+
 ### Result
 
 The library returns a structured result on success:

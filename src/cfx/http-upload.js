@@ -6,6 +6,8 @@ const DEFAULT_CHUNK_COUNT = 4;
 const DEFAULT_CHANGELOG = 'Automated upload from cfx-uploader.';
 const DEFAULT_POLL_TIMEOUT_MS = 120000;
 const DEFAULT_POLL_INTERVAL_MS = 3000;
+const UPLOAD_STREAM_SLICE_BYTES = 64 * 1024;
+const UPLOAD_PROGRESS_STEP_PERCENT = 5;
 const MAX_VERSIONS_ERROR_CODE = 'MAX_VERSIONS_REACHED';
 const MAX_VERSIONS_MESSAGE = 'CFX asset has reached the maximum of 5 versions. Enable deleteOldestVersionWhenCapped to delete the oldest version automatically.';
 
@@ -260,15 +262,54 @@ async function createReUploadWithCapHandling(session, options) {
   }
 }
 
-async function uploadChunk(session, assetId, versionId, chunkId, chunk) {
+/**
+ * Serialize a FormData body and expose it as a stream that reports sent bytes.
+ * @param {FormData} form
+ * @param {(sentBytes: number, totalBytes: number) => void} onBytesSent
+ */
+async function createTrackedMultipartBody(form, onBytesSent) {
+  const serialized = new Response(form);
+  const contentType = serialized.headers.get('content-type');
+  const bytes = new Uint8Array(await serialized.arrayBuffer());
+  let offset = 0;
+
+  const body = new ReadableStream({
+    pull(controller) {
+      if (offset >= bytes.length) {
+        controller.close();
+        return;
+      }
+
+      const end = Math.min(offset + UPLOAD_STREAM_SLICE_BYTES, bytes.length);
+      controller.enqueue(bytes.subarray(offset, end));
+      offset = end;
+      onBytesSent(offset, bytes.length);
+    },
+  });
+
+  return {
+    body,
+    headers: {
+      'Content-Type': contentType,
+      'Content-Length': String(bytes.length),
+    },
+  };
+}
+
+async function uploadChunk(session, assetId, versionId, chunkId, chunk, onBytesSent = null) {
   const form = new FormData();
   form.set('chunk_id', String(chunkId));
   form.set('chunk', new Blob([chunk], { type: 'application/octet-stream' }), 'blob');
 
-  const response = await cfxFetch(session, `/v1/assets/${assetId}/versions/${versionId}/upload-chunk`, {
-    method: 'POST',
-    body: form,
-  });
+  const requestOptions = { method: 'POST', body: form };
+  if (typeof onBytesSent === 'function') {
+    const tracked = await createTrackedMultipartBody(form, onBytesSent);
+    requestOptions.body = tracked.body;
+    requestOptions.headers = tracked.headers;
+    requestOptions.duplex = 'half';
+  }
+
+  const response = await cfxFetch(session, `/v1/assets/${assetId}/versions/${versionId}/upload-chunk`, requestOptions);
 
   const body = await readResponseBody(response);
 
@@ -317,6 +358,14 @@ async function pollUntilActive(session, assetId, versionId, options = {}) {
       return lastAssetDetails;
     }
 
+    if (typeof options.onPoll === 'function') {
+      await options.onPoll({
+        ...summarizeAssetState(lastAssetDetails, versionId),
+        elapsedMs: Date.now() - startedAt,
+        timeoutMs,
+      });
+    }
+
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
 
@@ -333,6 +382,9 @@ async function uploadZipVersionHttp(session, options) {
     releaseCandidate = false,
     deleteOldestVersionWhenCapped = false,
     maxPrereleaseVersionsToKeep = null,
+    onUploadProgress = null,
+    onFinalizeStart = null,
+    onFinalizePoll = null,
   } = options;
 
   const preparedMetadata = {
@@ -358,16 +410,51 @@ async function uploadZipVersionHttp(session, options) {
   });
   const versionId = createPayload.version_id;
 
+  const totalBytes = zipBuffer.length;
+  let completedBytes = 0;
+  let lastReportedPercent = -1;
+  const reportUploadProgress = (chunkId, uploadedBytes) => {
+    if (typeof onUploadProgress !== 'function') {
+      return;
+    }
+
+    const percent = totalBytes > 0 ? Math.floor((uploadedBytes / totalBytes) * 100) : 100;
+    if (percent !== 100 && percent - lastReportedPercent < UPLOAD_PROGRESS_STEP_PERCENT) {
+      return;
+    }
+    if (percent === lastReportedPercent) {
+      return;
+    }
+
+    lastReportedPercent = percent;
+    Promise.resolve(onUploadProgress({
+      chunkIndex: chunkId + 1,
+      chunkCount: chunkPlan.chunkCount,
+      uploadedBytes,
+      totalBytes,
+      percent,
+    })).catch(() => {});
+  };
+
   for (const { chunkId, chunk } of chunkPlan.chunks) {
     console.log(`Uploading chunk ${chunkId + 1}/${chunkPlan.chunkCount} (${chunk.length} bytes)`);
-    await uploadChunk(session, asset.id, versionId, chunkId, chunk);
+    await uploadChunk(session, asset.id, versionId, chunkId, chunk, (sentBytes, bodyBytes) => {
+      // The multipart envelope adds a few bytes; scale back to the ZIP chunk size.
+      const sentChunkBytes = Math.floor((sentBytes / bodyBytes) * chunk.length);
+      reportUploadProgress(chunkId, completedBytes + sentChunkBytes);
+    });
+    completedBytes += chunk.length;
+  }
+
+  if (typeof onFinalizeStart === 'function') {
+    await onFinalizeStart({ versionId });
   }
 
   console.log('Completing HTTP upload');
   await completeUpload(session, asset.id, versionId);
 
   console.log('Polling CFX asset until ACTIVE');
-  const finalAsset = await pollUntilActive(session, asset.id, versionId);
+  const finalAsset = await pollUntilActive(session, asset.id, versionId, { onPoll: onFinalizePoll });
 
   return {
     assetId: asset.id,

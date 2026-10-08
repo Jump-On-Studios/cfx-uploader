@@ -81,10 +81,10 @@ async function runHttpUploadFlow(options) {
       step: 'resolve-release',
       label: 'Resolving GitHub release asset',
       index: 1,
-      total: 6,
+      total: 7,
       meta: { repository, releaseTag },
     });
-    log('\nStep 1/6: Resolving GitHub release asset');
+    log('\nStep 1/7: Resolving GitHub release asset');
     const releaseInfo = await getReleaseDownloadInfo({
       repository,
       releaseTag,
@@ -104,14 +104,14 @@ async function runHttpUploadFlow(options) {
       step: 'download-release',
       label: 'Downloading release ZIP',
       index: 2,
-      total: 6,
+      total: 7,
       meta: {
         resolvedReleaseTag: releaseInfo.version,
         githubPrerelease: Boolean(releaseInfo.prerelease),
         releaseCandidate: resolvedReleaseCandidate,
       },
     });
-    log('\nStep 2/6: Downloading release ZIP');
+    log('\nStep 2/7: Downloading release ZIP');
     downloadedZipPath = await downloadReleaseZip({
       releaseInfo,
       releasesDir,
@@ -122,10 +122,10 @@ async function runHttpUploadFlow(options) {
       step: 'prepare-zip',
       label: 'Reading cfx_uploader.json and rebuilding filtered ZIP',
       index: 3,
-      total: 6,
+      total: 7,
       meta: { downloadedZipPath },
     });
-    log('\nStep 3/6: Reading cfx_uploader.json and rebuilding filtered ZIP');
+    log('\nStep 3/7: Reading cfx_uploader.json and rebuilding filtered ZIP');
     const unzippedRootPath = await unzipDownloadedRelease({
       downloadedZipPath,
       tempExtractDir,
@@ -156,7 +156,7 @@ async function runHttpUploadFlow(options) {
       step: 'prepare-zip',
       label: `Config loaded for ${config.portalName}`,
       index: 3,
-      total: 6,
+      total: 7,
       meta: {
         portalName: config.portalName,
         foldersToZip: config.foldersToZip,
@@ -182,10 +182,10 @@ async function runHttpUploadFlow(options) {
       step: 'read-metadata',
       label: 'Reading ZIP metadata',
       index: 4,
-      total: 6,
+      total: 7,
       meta: { zipPath: createdZipPath },
     });
-    log('\nStep 4/6: Reading ZIP metadata');
+    log('\nStep 4/7: Reading ZIP metadata');
     const metadata = await readZipMetadata(createdZipPath);
     log(`fxmanifest: ${metadata.fxmanifestPath}`);
     log(`Version: ${metadata.version}`, { version: metadata.version });
@@ -199,7 +199,7 @@ async function runHttpUploadFlow(options) {
       step: 'read-metadata',
       label: `Detected version ${metadata.version}`,
       index: 4,
-      total: 6,
+      total: 7,
       meta: {
         fxmanifestPath: metadata.fxmanifestPath,
         version: metadata.version,
@@ -211,10 +211,10 @@ async function runHttpUploadFlow(options) {
       step: 'authenticate-cfx',
       label: 'Authenticating with CFX',
       index: 5,
-      total: 6,
+      total: 7,
       meta: { headless, authMethod: auth?.method || (passkey ? 'passkey' : 'cached') },
     });
-    log('\nStep 5/6: Resolving authenticated CFX session');
+    log('\nStep 5/7: Resolving authenticated CFX session');
     if (passkeySource) {
       log(`Passkey source: ${passkeySource}`);
     }
@@ -238,7 +238,7 @@ async function runHttpUploadFlow(options) {
       step: 'authenticate-cfx',
       label: sessionResult.sessionReused ? 'Reused authenticated CFX session' : 'Authenticated CFX session ready',
       index: 5,
-      total: 6,
+      total: 7,
       meta: {
         authMethod: sessionResult.authMethod,
         sessionReused: sessionResult.sessionReused,
@@ -249,16 +249,16 @@ async function runHttpUploadFlow(options) {
       step: 'upload-cfx',
       label: 'Uploading through CFX HTTP API',
       index: 6,
-      total: 6,
+      total: 7,
       meta: { portalName: config.portalName },
     });
-    log('\nStep 6/6: Uploading through CFX HTTP API');
+    log('\nStep 6/7: Uploading through CFX HTTP API');
     const asset = await findAssetByExactName(session, config.portalName);
     await progress({
       step: 'upload-cfx',
       label: `CFX asset found: ${asset.name}`,
       index: 6,
-      total: 6,
+      total: 7,
       meta: {
         assetId: asset.id,
         portalName: asset.name,
@@ -274,14 +274,49 @@ async function runHttpUploadFlow(options) {
       releaseCandidate: resolvedReleaseCandidate,
       deleteOldestVersionWhenCapped: resolvedDeleteOldestVersionWhenCapped,
       maxPrereleaseVersionsToKeep: resolvedMaxPrereleaseVersionsToKeep,
+      onUploadProgress: async (uploadProgress) => {
+        log(`Upload progress: ${uploadProgress.percent}% (chunk ${uploadProgress.chunkIndex}/${uploadProgress.chunkCount})`, uploadProgress);
+        await progress({
+          step: 'upload-cfx',
+          label: `Uploading to CFX: ${uploadProgress.percent}%`,
+          index: 6,
+          total: 7,
+          meta: {
+            ...uploadProgress,
+            version: metadata.version,
+          },
+        });
+      },
+      onFinalizeStart: async ({ versionId }) => {
+        await progress({
+          step: 'finalize-cfx',
+          label: 'Waiting for CFX to finalize the version',
+          index: 7,
+          total: 7,
+          meta: { versionId, version: metadata.version },
+        });
+        log('\nStep 7/7: Waiting for CFX to finalize the version');
+      },
+      onFinalizePoll: async (pollStatus) => {
+        const versionState = pollStatus.latestVersion?.state || 'pending';
+        const elapsedSeconds = Math.round(pollStatus.elapsedMs / 1000);
+        log(`CFX state: asset=${pollStatus.state}, version=${versionState} (${elapsedSeconds}s)`, pollStatus);
+        await progress({
+          step: 'finalize-cfx',
+          label: `CFX version state: ${versionState} (${elapsedSeconds}s)`,
+          index: 7,
+          total: 7,
+          meta: { ...pollStatus, version: metadata.version },
+        });
+      },
     });
 
     if (uploadResult.deletedVersion) {
       await progress({
-        step: 'upload-cfx',
+        step: 'finalize-cfx',
         label: `Deleted old CFX version ${uploadResult.deletedVersion.version}`,
-        index: 6,
-        total: 6,
+        index: 7,
+        total: 7,
         meta: {
           deletedVersion: uploadResult.deletedVersion,
         },
@@ -289,10 +324,10 @@ async function runHttpUploadFlow(options) {
     }
 
     await progress({
-      step: 'upload-cfx',
+      step: 'finalize-cfx',
       label: `CFX upload finalized: ${uploadResult.version}`,
-      index: 6,
-      total: 6,
+      index: 7,
+      total: 7,
       status: 'completed',
       meta: {
         assetId: uploadResult.assetId,
