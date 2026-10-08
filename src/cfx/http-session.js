@@ -1,5 +1,6 @@
 const API_ORIGIN = 'https://portal-api.cfx.re';
 const PORTAL_ORIGIN = 'https://portal.cfx.re';
+const DEFAULT_REQUEST_TIMEOUT_MS = 30000;
 
 function buildCookieHeader(cookies) {
   const cookieMap = new Map();
@@ -53,12 +54,25 @@ async function createCfxHttpSession(page) {
   return createCfxHttpSessionFromCookies(cookies, userAgent);
 }
 
+function isTimeoutError(error) {
+  return error?.name === 'TimeoutError' || error?.code === 'CFX_HTTP_TIMEOUT';
+}
+
 async function readResponseBody(response) {
   try {
     return await response.text();
   } catch (error) {
+    if (isTimeoutError(error)) {
+      throw createTimeoutError(response.url, error);
+    }
     return `<failed to read response body: ${error.message}>`;
   }
+}
+
+function createTimeoutError(url, cause) {
+  const error = new Error(`CFX HTTP request timed out: ${url}`, { cause });
+  error.code = 'CFX_HTTP_TIMEOUT';
+  return error;
 }
 
 function resolveApiUrl(session, pathOrUrl) {
@@ -70,13 +84,26 @@ function resolveApiUrl(session, pathOrUrl) {
 }
 
 async function cfxFetch(session, pathOrUrl, options = {}) {
-  const response = await fetch(resolveApiUrl(session, pathOrUrl), {
-    ...options,
-    headers: {
-      ...session.baseHeaders,
-      ...(options.headers || {}),
-    },
-  });
+  const { timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS, ...fetchOptions } = options;
+  const url = resolveApiUrl(session, pathOrUrl);
+  let response;
+
+  // The timeout signal also covers reading the response body.
+  try {
+    response = await fetch(url, {
+      signal: AbortSignal.timeout(timeoutMs),
+      ...fetchOptions,
+      headers: {
+        ...session.baseHeaders,
+        ...(fetchOptions.headers || {}),
+      },
+    });
+  } catch (error) {
+    if (isTimeoutError(error)) {
+      throw createTimeoutError(url, error);
+    }
+    throw error;
+  }
 
   if (response.status === 401 || response.status === 403) {
     const body = await readResponseBody(response);
@@ -117,5 +144,6 @@ module.exports = {
   createCfxHttpSessionFromCookies,
   cfxFetch,
   cfxJson,
+  isTimeoutError,
   readResponseBody,
 };

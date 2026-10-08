@@ -1,11 +1,13 @@
 const fs = require('fs/promises');
-const { cfxJson, cfxFetch, readResponseBody } = require('./http-session');
+const { cfxJson, cfxFetch, isTimeoutError, readResponseBody } = require('./http-session');
 const { getAssetDetails } = require('./http-assets');
 
 const DEFAULT_CHUNK_COUNT = 4;
 const DEFAULT_CHANGELOG = 'Automated upload from cfx-uploader.';
 const DEFAULT_POLL_TIMEOUT_MS = 120000;
 const DEFAULT_POLL_INTERVAL_MS = 3000;
+const POLL_REQUEST_TIMEOUT_MS = 15000;
+const CHUNK_UPLOAD_TIMEOUT_MS = 5 * 60 * 1000;
 const UPLOAD_STREAM_SLICE_BYTES = 64 * 1024;
 const UPLOAD_PROGRESS_STEP_PERCENT = 5;
 const MAX_VERSIONS_ERROR_CODE = 'MAX_VERSIONS_REACHED';
@@ -301,7 +303,7 @@ async function uploadChunk(session, assetId, versionId, chunkId, chunk, onBytesS
   form.set('chunk_id', String(chunkId));
   form.set('chunk', new Blob([chunk], { type: 'application/octet-stream' }), 'blob');
 
-  const requestOptions = { method: 'POST', body: form };
+  const requestOptions = { method: 'POST', body: form, timeoutMs: CHUNK_UPLOAD_TIMEOUT_MS };
   if (typeof onBytesSent === 'function') {
     const tracked = await createTrackedMultipartBody(form, onBytesSent);
     requestOptions.body = tracked.body;
@@ -351,16 +353,33 @@ async function pollUntilActive(session, assetId, versionId, options = {}) {
   let lastAssetDetails = null;
 
   while (Date.now() - startedAt < timeoutMs) {
-    lastAssetDetails = await getAssetDetails(session, assetId);
-    const version = findVersionById(lastAssetDetails, versionId);
+    const remainingMs = timeoutMs - (Date.now() - startedAt);
+    let requestTimedOut = false;
 
-    if (lastAssetDetails.state === 'active' && (!version || version.state === 'active')) {
-      return lastAssetDetails;
+    try {
+      lastAssetDetails = await getAssetDetails(session, assetId, {
+        timeoutMs: Math.max(1000, Math.min(POLL_REQUEST_TIMEOUT_MS, remainingMs)),
+      });
+    } catch (error) {
+      // A stalled status request must not hang the upload; retry until the poll deadline.
+      if (!isTimeoutError(error)) {
+        throw error;
+      }
+      requestTimedOut = true;
+    }
+
+    if (!requestTimedOut) {
+      const version = findVersionById(lastAssetDetails, versionId);
+
+      if (lastAssetDetails.state === 'active' && (!version || version.state === 'active')) {
+        return lastAssetDetails;
+      }
     }
 
     if (typeof options.onPoll === 'function') {
       await options.onPoll({
-        ...summarizeAssetState(lastAssetDetails, versionId),
+        ...summarizeAssetState(lastAssetDetails || {}, versionId),
+        requestTimedOut,
         elapsedMs: Date.now() - startedAt,
         timeoutMs,
       });

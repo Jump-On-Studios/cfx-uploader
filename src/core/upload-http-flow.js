@@ -300,10 +300,13 @@ async function runHttpUploadFlow(options) {
       onFinalizePoll: async (pollStatus) => {
         const versionState = pollStatus.latestVersion?.state || 'pending';
         const elapsedSeconds = Math.round(pollStatus.elapsedMs / 1000);
-        log(`CFX state: asset=${pollStatus.state}, version=${versionState} (${elapsedSeconds}s)`, pollStatus);
+        const stateSummary = pollStatus.requestTimedOut
+          ? 'CFX status request timed out, retrying'
+          : `CFX state: asset=${pollStatus.state || 'unknown'}, version=${versionState}, chunks=${pollStatus.chunk_status || 'n/a'}`;
+        log(`${stateSummary} (${elapsedSeconds}s)`, pollStatus);
         await progress({
           step: 'finalize-cfx',
-          label: `CFX version state: ${versionState} (${elapsedSeconds}s)`,
+          label: `${stateSummary} (${elapsedSeconds}s)`,
           index: 7,
           total: 7,
           meta: { ...pollStatus, version: metadata.version },

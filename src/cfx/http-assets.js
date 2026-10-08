@@ -53,8 +53,8 @@ async function findAssetByExactName(session, assetName) {
   return asset;
 }
 
-async function getAssetDetails(session, assetId) {
-  return cfxJson(session, withCacheBuster(`/v1/assets/${assetId}`));
+async function getAssetDetails(session, assetId, options = {}) {
+  return cfxJson(session, withCacheBuster(`/v1/assets/${assetId}`), options);
 }
 
 module.exports = {
