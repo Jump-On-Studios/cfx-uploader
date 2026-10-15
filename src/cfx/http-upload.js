@@ -13,6 +13,7 @@ const UPLOAD_PROGRESS_STEP_PERCENT = 5;
 const MAX_VERSIONS_ERROR_CODE = 'MAX_VERSIONS_REACHED';
 const MAX_VERSIONS_MESSAGE = 'CFX asset has reached the maximum of 5 versions. Enable deleteOldestVersionWhenCapped to delete the oldest version automatically.';
 const VERSION_EXISTS_ERROR_CODE = 'CFX_VERSION_EXISTS';
+const POLL_TIMEOUT_ERROR_CODE = 'CFX_POLL_TIMEOUT';
 
 function findVersionByValue(assetDetails, version) {
   return (assetDetails.versions || []).find((candidate) => candidate && candidate.version === version);
@@ -355,6 +356,28 @@ function summarizeAssetState(assetDetails, versionId) {
   };
 }
 
+function isVersionActive(assetDetails, versionId) {
+  const version = findVersionById(assetDetails, versionId);
+  return assetDetails.state === 'active' && (!version || version.state === 'active');
+}
+
+/**
+ * Read the current CFX state of one asset version, without waiting.
+ * @returns {Promise<{ found: boolean, active: boolean, assetState: string | null, versionState: string | null, version: string | null }>}
+ */
+async function getVersionStatus(session, assetId, versionId) {
+  const assetDetails = await getAssetDetails(session, assetId);
+  const version = findVersionById(assetDetails, versionId);
+
+  return {
+    found: Boolean(version),
+    active: Boolean(version) && isVersionActive(assetDetails, versionId),
+    assetState: assetDetails.state || null,
+    versionState: version?.state || null,
+    version: version?.version || null,
+  };
+}
+
 async function pollUntilActive(session, assetId, versionId, options = {}) {
   const timeoutMs = options.timeoutMs || DEFAULT_POLL_TIMEOUT_MS;
   const intervalMs = options.intervalMs || DEFAULT_POLL_INTERVAL_MS;
@@ -377,12 +400,8 @@ async function pollUntilActive(session, assetId, versionId, options = {}) {
       requestTimedOut = true;
     }
 
-    if (!requestTimedOut) {
-      const version = findVersionById(lastAssetDetails, versionId);
-
-      if (lastAssetDetails.state === 'active' && (!version || version.state === 'active')) {
-        return lastAssetDetails;
-      }
+    if (!requestTimedOut && isVersionActive(lastAssetDetails, versionId)) {
+      return lastAssetDetails;
     }
 
     if (typeof options.onPoll === 'function') {
@@ -397,7 +416,15 @@ async function pollUntilActive(session, assetId, versionId, options = {}) {
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
 
-  throw new Error(`CFX poll timeout waiting for ACTIVE: ${JSON.stringify(summarizeAssetState(lastAssetDetails || {}, versionId))}`);
+  const assetState = summarizeAssetState(lastAssetDetails || {}, versionId);
+  const error = new Error(`CFX poll timeout waiting for ACTIVE: ${JSON.stringify(assetState)}`);
+  // The version is fully uploaded at this point: callers can check it again later with getVersionStatus.
+  error.code = POLL_TIMEOUT_ERROR_CODE;
+  error.assetId = assetId;
+  error.versionId = versionId;
+  error.version = assetState.latestVersion?.id === versionId ? assetState.latestVersion.version : null;
+  error.assetState = assetState;
+  throw error;
 }
 
 async function uploadZipVersionHttp(session, options) {
@@ -482,7 +509,15 @@ async function uploadZipVersionHttp(session, options) {
   await completeUpload(session, asset.id, versionId);
 
   console.log('Polling CFX asset until ACTIVE');
-  const finalAsset = await pollUntilActive(session, asset.id, versionId, { onPoll: onFinalizePoll });
+  let finalAsset;
+  try {
+    finalAsset = await pollUntilActive(session, asset.id, versionId, { onPoll: onFinalizePoll });
+  } catch (error) {
+    if (error.code === POLL_TIMEOUT_ERROR_CODE) {
+      error.version = preparedMetadata.version;
+    }
+    throw error;
+  }
 
   return {
     assetId: asset.id,
@@ -501,6 +536,8 @@ module.exports = {
   MAX_VERSIONS_ERROR_CODE,
   MAX_VERSIONS_MESSAGE,
   VERSION_EXISTS_ERROR_CODE,
+  POLL_TIMEOUT_ERROR_CODE,
+  getVersionStatus,
   splitIntoChunks,
   resolveVersionToDeleteForCap,
   uploadZipVersionHttp,

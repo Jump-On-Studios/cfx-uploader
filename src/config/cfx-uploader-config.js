@@ -7,6 +7,7 @@ const path = require('path');
 const { normalizeMaxPrereleaseVersionsToKeep } = require('../utils/prerelease-retention');
 
 const CONFIG_FILE_NAME = 'cfx_uploader.json';
+const CONFIG_MISSING_ERROR_CODE = 'CFX_UPLOADER_CONFIG_MISSING';
 
 function isGitHubActions() {
   return process.env.GITHUB_ACTIONS === 'true';
@@ -95,7 +96,9 @@ async function readCfxUploaderConfig(
     }
 
     if (!allowFallbackConfig || isGitHubActions()) {
-      throw new Error(`Missing ${CONFIG_FILE_NAME} at repository root: ${configPath}`);
+      const missingError = new Error(`Missing ${CONFIG_FILE_NAME} at repository root: ${configPath}`);
+      missingError.code = CONFIG_MISSING_ERROR_CODE;
+      throw missingError;
     }
 
     return normalizeConfig(fallbackConfig, githubRepository, null);
@@ -104,6 +107,7 @@ async function readCfxUploaderConfig(
 
 module.exports = {
   CONFIG_FILE_NAME,
+  CONFIG_MISSING_ERROR_CODE,
   resolveGithubRepository,
   readCfxUploaderConfig,
   normalizeConfig,

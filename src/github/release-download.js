@@ -46,35 +46,96 @@ function buildGithubHeaders(githubToken, accept = 'application/vnd.github+json')
  * @returns {{ url: string, fileName: string, version: string | null, source: 'asset' | 'zipball', body: string | null, prerelease: boolean } | null}
  */
 function getDownloadInfoFromRelease(release) {
-  if (Array.isArray(release.assets) && release.assets.length > 0) {
-    const zipAsset = release.assets.find(
-      (asset) => asset.name.endsWith('.zip') || asset.content_type === 'application/zip'
-    );
+  const releaseFields = {
+    version: release.tag_name || null,
+    body: release.body || null,
+    prerelease: Boolean(release.prerelease),
+    releaseId: release.id || null,
+    zipballUrl: release.zipball_url || null,
+  };
+  const zipAsset = findZipAsset(release);
 
-    if (zipAsset) {
-      return {
-        url: zipAsset.browser_download_url,
-        fileName: zipAsset.name,
-        version: release.tag_name || null,
-        source: 'asset',
-        body: release.body || null,
-        prerelease: Boolean(release.prerelease),
-      };
-    }
+  if (zipAsset) {
+    return {
+      ...releaseFields,
+      url: zipAsset.browser_download_url,
+      fileName: zipAsset.name,
+      source: 'asset',
+    };
   }
 
-  if (!release.zipball_url) {
+  return getZipballDownloadInfo(releaseFields);
+}
+
+function findZipAsset(release) {
+  return (Array.isArray(release.assets) ? release.assets : []).find(
+    (asset) => asset.name.endsWith('.zip') || asset.content_type === 'application/zip'
+  ) || null;
+}
+
+/**
+ * Switch release download info to the GitHub source zipball of the same release.
+ * @param {Record<string, any>} releaseInfo
+ * @returns {Record<string, any> | null}
+ */
+function getZipballDownloadInfo(releaseInfo) {
+  if (!releaseInfo.zipballUrl) {
     return null;
   }
 
   return {
-    url: release.zipball_url,
-    fileName: `${release.tag_name || 'latest'}.zip`,
-    version: release.tag_name || null,
+    ...releaseInfo,
+    url: releaseInfo.zipballUrl,
+    fileName: `${releaseInfo.version || 'latest'}.zip`,
     source: 'zipball',
-    body: release.body || null,
-    prerelease: Boolean(release.prerelease),
   };
+}
+
+/**
+ * Attach a ZIP to a GitHub release, unless the release already has one.
+ * Needs a token with write access to the repository contents.
+ * @param {{ repository: string, releaseId: number, zipPath: string, githubToken: string }} options
+ * @returns {Promise<{ status: 'uploaded' | 'exists', name: string, url?: string }>}
+ */
+async function attachZipToRelease(options) {
+  const { repository, releaseId, zipPath, githubToken } = options;
+  const name = path.basename(zipPath);
+
+  // The repository may attach its own build ZIP a few seconds after publication.
+  const releaseResponse = await fetch(`https://api.github.com/repos/${repository}/releases/${releaseId}`, {
+    headers: buildGithubHeaders(githubToken),
+  });
+  if (!releaseResponse.ok) {
+    throw new Error(`GitHub API error for release ${releaseId}: ${releaseResponse.status} ${releaseResponse.statusText}`);
+  }
+  const existingZip = findZipAsset(await releaseResponse.json());
+  if (existingZip) {
+    return { status: 'exists', name: existingZip.name };
+  }
+
+  const zipBuffer = await fs.readFile(zipPath);
+  const uploadResponse = await fetch(
+    `https://uploads.github.com/repos/${repository}/releases/${releaseId}/assets?name=${encodeURIComponent(name)}`,
+    {
+      method: 'POST',
+      headers: {
+        ...buildGithubHeaders(githubToken),
+        'Content-Type': 'application/zip',
+      },
+      body: zipBuffer,
+    }
+  );
+
+  if (uploadResponse.status === 422) {
+    return { status: 'exists', name };
+  }
+
+  if (!uploadResponse.ok) {
+    throw new Error(`GitHub release asset upload failed: ${uploadResponse.status} ${await uploadResponse.text()}`);
+  }
+
+  const asset = await uploadResponse.json();
+  return { status: 'uploaded', name: asset.name || name, url: asset.browser_download_url };
 }
 
 function getAlternateReleaseTag(releaseTag) {
@@ -269,6 +330,8 @@ async function downloadReleaseZip(options) {
 
 module.exports = {
   getDownloadInfoFromRelease,
+  getZipballDownloadInfo,
+  attachZipToRelease,
   getAlternateReleaseTag,
   normalizeVersionForCompare,
   assertReleaseVersionMatchesManifest,

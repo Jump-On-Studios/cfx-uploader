@@ -4,7 +4,7 @@ const {
   validateAuthenticationOptions,
 } = require('./create-uploader');
 
-async function checkAuthentication(options = {}) {
+async function resolveLibrarySession(options = {}) {
   validateAuthenticationOptions(options);
 
   if (options.auth && (options.passkey || options.passkeyJson || options.passkeyCredentialPath)) {
@@ -18,7 +18,7 @@ async function checkAuthentication(options = {}) {
     credential = resolveLibraryPasskey(options);
   }
 
-  const result = await resolveCfxHttpSession({
+  return resolveCfxHttpSession({
     headless: options.headless !== false,
     auth: options.auth,
     credential,
@@ -33,6 +33,10 @@ async function checkAuthentication(options = {}) {
     headlessFingerprint: options.headlessFingerprint || 'native',
     onLog: typeof options.onLog === 'function' ? options.onLog : console.log,
   });
+}
+
+async function checkAuthentication(options = {}) {
+  const result = await resolveLibrarySession(options);
 
   return {
     authMethod: result.sessionReused ? 'cached' : result.authMethod,
@@ -42,4 +46,5 @@ async function checkAuthentication(options = {}) {
 
 module.exports = {
   checkAuthentication,
+  resolveLibrarySession,
 };

@@ -3,6 +3,8 @@ const path = require('path');
 
 const {
   getReleaseDownloadInfo,
+  getZipballDownloadInfo,
+  attachZipToRelease,
   assertReleaseVersionMatchesManifest,
   downloadReleaseZip,
 } = require('../github/release-download');
@@ -13,7 +15,7 @@ const {
   cleanupFile,
   cleanupTempExtractDir,
 } = require('../zip/zip-workflow');
-const { readCfxUploaderConfig } = require('../config/cfx-uploader-config');
+const { CONFIG_MISSING_ERROR_CODE, readCfxUploaderConfig } = require('../config/cfx-uploader-config');
 const { readZipMetadata } = require('../zip/zip-metadata');
 const { resolveCfxHttpSession } = require('../auth/cfx-session');
 const { findAssetByExactName, getAssetDetails } = require('../cfx/http-assets');
@@ -35,6 +37,7 @@ async function runHttpUploadFlow(options) {
     releaseCandidate,
     deleteOldestVersionWhenCapped,
     maxPrereleaseVersionsToKeep,
+    attachZipToReleaseWhenMissing = false,
     changelog = null,
     sessionCachePath = null,
     sessionEncryptionKey = null,
@@ -85,7 +88,7 @@ async function runHttpUploadFlow(options) {
       meta: { repository, releaseTag },
     });
     log('\nStep 1/7: Resolving GitHub release asset');
-    const releaseInfo = await getReleaseDownloadInfo({
+    let releaseInfo = await getReleaseDownloadInfo({
       repository,
       releaseTag,
       githubToken,
@@ -94,6 +97,7 @@ async function runHttpUploadFlow(options) {
     if (!releaseInfo) {
       throw new Error(`No downloadable release found for ${repository}${releaseTag ? ` tag ${releaseTag}` : ''}.`);
     }
+    const releaseHasZipAsset = releaseInfo.source === 'asset';
     const resolvedReleaseCandidate = typeof releaseCandidate === 'boolean'
       ? releaseCandidate
       : Boolean(releaseInfo.prerelease);
@@ -126,17 +130,52 @@ async function runHttpUploadFlow(options) {
       meta: { downloadedZipPath },
     });
     log('\nStep 3/7: Reading cfx_uploader.json and rebuilding filtered ZIP');
-    const unzippedRootPath = await unzipDownloadedRelease({
+    let unzippedRootPath = await unzipDownloadedRelease({
       downloadedZipPath,
       tempExtractDir,
     });
+    let config;
+    try {
+      config = await readCfxUploaderConfig(
+        unzippedRootPath,
+        repository,
+        fallbackConfig,
+        { allowFallbackConfig },
+      );
+    } catch (error) {
+      // A build ZIP attached to the release usually only holds the resource folder,
+      // while cfx_uploader.json lives at the repository root: use the source zipball.
+      const zipballInfo = releaseInfo.source === 'asset' ? getZipballDownloadInfo(releaseInfo) : null;
+      if (error.code !== CONFIG_MISSING_ERROR_CODE || !zipballInfo) {
+        throw error;
+      }
+      log(`${error.message}\nRelease asset ${releaseInfo.fileName} has no cfx_uploader.json; using the source ZIP of the release instead.`);
+      await progress({
+        step: 'prepare-zip',
+        label: `${releaseInfo.fileName} has no cfx_uploader.json, using the source ZIP`,
+        index: 3,
+        total: 7,
+        meta: { releaseAsset: releaseInfo.fileName },
+      });
+      await cleanupFile(downloadedZipPath, log);
+      releaseInfo = zipballInfo;
+      downloadedZipPath = await downloadReleaseZip({
+        releaseInfo,
+        releasesDir,
+        githubToken,
+      });
+      unzippedRootPath = await unzipDownloadedRelease({
+        downloadedZipPath,
+        tempExtractDir,
+      });
+      config = await readCfxUploaderConfig(
+        unzippedRootPath,
+        repository,
+        fallbackConfig,
+        { allowFallbackConfig },
+      );
+    }
     const topLevelFolders = await listTopLevelFolders(unzippedRootPath);
-    const config = await readCfxUploaderConfig(
-      unzippedRootPath,
-      repository,
-      fallbackConfig,
-      { allowFallbackConfig },
-    );
     const resolvedDeleteOldestVersionWhenCapped = typeof deleteOldestVersionWhenCapped === 'boolean'
       ? deleteOldestVersionWhenCapped
       : Boolean(config.deleteOldestVersionWhenCapped);
@@ -206,6 +245,34 @@ async function runHttpUploadFlow(options) {
         game: metadata.game,
       },
     });
+
+    // Done before CFX authentication so the GitHub download does not depend on the CFX upload.
+    let releaseAsset = { status: 'skipped' };
+    if (attachZipToReleaseWhenMissing && !releaseHasZipAsset && releaseInfo.releaseId) {
+      try {
+        releaseAsset = await attachZipToRelease({
+          repository,
+          releaseId: releaseInfo.releaseId,
+          zipPath: createdZipPath,
+          githubToken,
+        });
+        log(`GitHub release ZIP: ${releaseAsset.status} ${releaseAsset.name}`, releaseAsset);
+      } catch (error) {
+        releaseAsset = { status: 'failed', error: error.message };
+        log(`Warning: could not attach the ZIP to the GitHub release: ${error.message}`, { level: 'warn' });
+      }
+      await progress({
+        step: 'release-zip',
+        label: releaseAsset.status === 'uploaded'
+          ? `Attached ${releaseAsset.name} to the GitHub release`
+          : releaseAsset.status === 'exists'
+            ? `GitHub release already has ${releaseAsset.name}`
+            : 'Could not attach the ZIP to the GitHub release',
+        index: 4,
+        total: 7,
+        meta: { releaseAsset },
+      });
+    }
 
     await progress({
       step: 'authenticate-cfx',
@@ -355,6 +422,7 @@ async function runHttpUploadFlow(options) {
       deletedVersion: uploadResult.deletedVersion,
       deletedOldestVersion: uploadResult.deletedOldestVersion,
       finalAsset: uploadResult.finalAsset,
+      releaseAsset,
     };
   } finally {
     await cleanupTempExtractDir(tempExtractDir);

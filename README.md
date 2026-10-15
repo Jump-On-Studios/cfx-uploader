@@ -354,6 +354,8 @@ Fields:
 
 Library mode is strict: if `cfx_uploader.json` is missing from the downloaded release, upload fails with `Missing cfx_uploader.json at repository root...`. The `mock-config.js` fallback is only for local CLI development.
 
+When the release has a ZIP asset (for example a build ZIP that only contains the resource folder) and that ZIP has no `cfx_uploader.json`, CFX Uploader downloads the GitHub source ZIP of the same release instead and reads the config from the repository root.
+
 ## Library Usage
 
 ### `upload()`
@@ -436,6 +438,17 @@ It returns only:
 
 `checkAuthentication()` uses the same cache validation, fresh browser authentication, Portal handoff, timeouts, and password providers as `upload()`.
 
+### `checkVersionStatus()`
+
+When an upload fails with `code: "CFX_POLL_TIMEOUT"`, the version is already uploaded and CFX is still finalizing it. Check it again later with the `assetId` and `versionId` carried by the error:
+
+```js
+const status = await uploader.checkVersionStatus({ assetId: error.assetId, versionId: error.versionId });
+// { found: true, active: false, assetState: 'created', versionState: 'created', version: '1.1.2' }
+```
+
+It takes the same authentication options as `upload()` (also available as `checkVersionStatus()` from the package root) and reuses the session cache when it is valid.
+
 ### Minimal webhook example
 
 This example mirrors a common release-webhook integration: upload the published GitHub release to CFX, keep at most 2 prerelease versions, and expose the deleted CFX version for a private team notification.
@@ -502,6 +515,7 @@ export async function handleGithubReleaseWebhook(payload) {
 | `deleteOldestVersionWhenCapped` | no | Overrides the project JSON capped-version behavior. |
 | `maxPrereleaseVersionsToKeep` | no | Overrides the project JSON prerelease retention policy. Use `null` to delete the oldest version regardless of type. Values above `4` are capped to `4`. |
 | `changelog` | no | CFX release notes. Defaults to the GitHub release body. |
+| `attachZipToReleaseWhenMissing` | no | When `true` and the GitHub release has no ZIP asset, attach the filtered ZIP (`<first foldersToZip>.zip`) to the release before authenticating with CFX. Needs a `githubToken` with write access to the repository contents. A failure does not stop the CFX upload and is reported in `releaseAsset`. Defaults to `false`. |
 | `onLog` | no | Custom logger callback. Defaults to `console.log`. |
 | `onProgress` | no | Structured progress callback for external UIs, webhooks, or Discord workflow cards. |
 
@@ -542,9 +556,12 @@ The library returns a structured result on success:
   deletedVersion,
   deletedOldestVersion,
   authMethod: 'password',
-  sessionReused: false
+  sessionReused: false,
+  releaseAsset: { status: 'skipped' }
 }
 ```
+
+`releaseAsset.status` is `skipped` (option disabled or the release already had a ZIP), `uploaded`, `exists` (a ZIP appeared on the release in the meantime) or `failed` (with `error`).
 
 `authMethod` is `password`, `passkey`, or `cached`. Because uploads retain the configured authentication source when available, use `sessionReused`—not `authMethod` alone—to determine whether Puppeteer was skipped in favor of the encrypted cache.
 
@@ -882,7 +899,7 @@ Common errors:
 | Session cache | `Unable to decrypt CFX session cache...` | The cache key is wrong or the encrypted file is corrupted. |
 | GitHub release | `No downloadable release found for ...` | The release/tag could not be found or has no downloadable archive. |
 | GitHub release | `GitHub API error...` / `Download failed...` | GitHub rejected the release lookup or ZIP download. |
-| Project config | `Missing cfx_uploader.json at repository root...` | The downloaded release does not contain the required config file. |
+| Project config | `Missing cfx_uploader.json at repository root...` | Neither the release ZIP asset nor the source ZIP contains the required config file. The error has `code: "CFX_UPLOADER_CONFIG_MISSING"`. |
 | Project config | `Invalid cfx_uploader.json: portalName...` | `portalName` is missing or invalid. |
 | Project config | `Invalid cfx_uploader.json: foldersToZip...` | `foldersToZip` is missing or invalid. |
 | Project config | `Invalid cfx_uploader.json: deleteOldestVersionWhenCapped...` | The capped-version option is not a boolean. |
@@ -910,7 +927,7 @@ Common errors:
 | Upload create | `CFX re-upload response missing version_id: ...` | CFX did not return the expected version id. |
 | Chunk upload | `Chunk upload failed for chunk_id=... (...): ...` | One ZIP chunk failed to upload. |
 | Complete upload | `POST .../complete-upload failed (...): ...` | CFX rejected upload finalization. |
-| Polling | `CFX poll timeout waiting for ACTIVE: ...` | The asset/version did not become `active` before timeout. |
+| Polling | `CFX poll timeout waiting for ACTIVE: ...` | The asset/version did not become `active` before timeout. The version is uploaded: the error has `code: "CFX_POLL_TIMEOUT"`, `assetId`, `versionId`, `version` and `assetState`; use `checkVersionStatus()` to check it later. |
 | Local files | `ENOENT`, permission, or filesystem errors | A downloaded or generated ZIP file could not be read or written. |
 
 Local ZIPs and downloaded archives are not kept after failures. To inspect an upload ZIP, reproduce the run locally with a debugger or inspect the GitHub release source.

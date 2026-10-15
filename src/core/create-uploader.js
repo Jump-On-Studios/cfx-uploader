@@ -141,6 +141,13 @@ function validateUploadOptions(options) {
   }
 
   if (
+    options.attachZipToReleaseWhenMissing !== undefined &&
+    typeof options.attachZipToReleaseWhenMissing !== 'boolean'
+  ) {
+    throw new Error('Upload option "attachZipToReleaseWhenMissing" must be a boolean when provided.');
+  }
+
+  if (
     options.onProgress !== undefined &&
     typeof options.onProgress !== 'function'
   ) {
@@ -184,6 +191,7 @@ async function upload(options = {}) {
     releaseCandidate: options.releaseCandidate,
     deleteOldestVersionWhenCapped: options.deleteOldestVersionWhenCapped,
     maxPrereleaseVersionsToKeep: normalizeMaxPrereleaseVersionsToKeep(options.maxPrereleaseVersionsToKeep),
+    attachZipToReleaseWhenMissing: options.attachZipToReleaseWhenMissing === true,
     changelog: options.changelog ?? null,
     sessionCachePath: options.sessionCachePath || null,
     sessionEncryptionKey: options.sessionEncryptionKey || null,
@@ -203,6 +211,14 @@ function createUploader(baseOptions = {}) {
       return upload({
         ...baseOptions,
         ...uploadOptions,
+      });
+    },
+    checkVersionStatus(statusOptions = {}) {
+      // Required lazily: check-version-status depends on this module.
+      const { checkVersionStatus } = require('./check-version-status');
+      return checkVersionStatus({
+        ...baseOptions,
+        ...statusOptions,
       });
     },
   };
