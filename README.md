@@ -901,7 +901,7 @@ Common errors:
 | Asset lookup | `Unexpected CFX assets list shape: ...` | The CFX assets list response format changed. |
 | Asset lookup | `CFX asset not found by exact name "...". First assets: ...` | `portalName` does not exactly match an owned CFX asset. |
 | Asset lookup | `CFX asset "..." is missing an id...` | The matching CFX asset response is malformed. |
-| Upload validation | `Version already exists on asset "...": ...` | The version from `fxmanifest.lua` already exists on the CFX asset. |
+| Upload validation | `Version already exists on asset "...": ...` | The version from `fxmanifest.lua` already exists on the CFX asset. Nothing is uploaded. The error has `code: "CFX_VERSION_EXISTS"`, `assetId`, `versionId`, `version` and `versionState`. |
 | Upload create | `CFX asset has reached the maximum of 5 versions...` | The asset is capped and `deleteOldestVersionWhenCapped` is disabled. |
 | Upload create | `MAX_VERSIONS_REACHED` | CFX rejected the upload because the asset already has 5 versions. Enable `deleteOldestVersionWhenCapped` if automatic deletion is desired. |
 | Upload cleanup | `DELETE .../versions/... failed (...): ...` | Automatic oldest-version deletion was enabled, but CFX rejected the delete request. |

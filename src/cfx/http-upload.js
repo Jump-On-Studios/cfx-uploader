@@ -12,6 +12,7 @@ const UPLOAD_STREAM_SLICE_BYTES = 64 * 1024;
 const UPLOAD_PROGRESS_STEP_PERCENT = 5;
 const MAX_VERSIONS_ERROR_CODE = 'MAX_VERSIONS_REACHED';
 const MAX_VERSIONS_MESSAGE = 'CFX asset has reached the maximum of 5 versions. Enable deleteOldestVersionWhenCapped to delete the oldest version automatically.';
+const VERSION_EXISTS_ERROR_CODE = 'CFX_VERSION_EXISTS';
 
 function findVersionByValue(assetDetails, version) {
   return (assetDetails.versions || []).find((candidate) => candidate && candidate.version === version);
@@ -22,8 +23,16 @@ function findVersionById(assetDetails, versionId) {
 }
 
 function assertVersionDoesNotExist(assetDetails, version) {
-  if (findVersionByValue(assetDetails, version)) {
-    throw new Error(`Version already exists on asset "${assetDetails.name}" (${assetDetails.id}): ${version}`);
+  const existingVersion = findVersionByValue(assetDetails, version);
+  if (existingVersion) {
+    const error = new Error(`Version already exists on asset "${assetDetails.name}" (${assetDetails.id}): ${version}`);
+    // CFX never accepts the same version twice: callers can stop instead of treating this as a failure.
+    error.code = VERSION_EXISTS_ERROR_CODE;
+    error.assetId = assetDetails.id;
+    error.versionId = existingVersion.id;
+    error.version = version;
+    error.versionState = existingVersion.state;
+    throw error;
   }
 }
 
@@ -491,6 +500,7 @@ module.exports = {
   DEFAULT_CHANGELOG,
   MAX_VERSIONS_ERROR_CODE,
   MAX_VERSIONS_MESSAGE,
+  VERSION_EXISTS_ERROR_CODE,
   splitIntoChunks,
   resolveVersionToDeleteForCap,
   uploadZipVersionHttp,
