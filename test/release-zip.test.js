@@ -45,23 +45,20 @@ function json(payload, status = 200) {
   return new Response(JSON.stringify(payload), { status });
 }
 
-test('keeps the release id and zipball url when a ZIP asset is preferred', () => {
+test('always uses the source zipball, even when the release has a ZIP asset', () => {
   const info = getDownloadInfoFromRelease(RELEASE);
-  assert.equal(info.source, 'asset');
+  assert.equal(info.source, 'zipball');
+  assert.equal(info.url, RELEASE.zipball_url);
+  assert.equal(info.fileName, 'v2.17.0.zip');
   assert.equal(info.releaseId, 42);
-  assert.equal(info.zipballUrl, RELEASE.zipball_url);
-  assert.equal(getDownloadInfoFromRelease({ ...RELEASE, assets: [] }).source, 'zipball');
 });
 
-test('uses the source zipball when the release ZIP asset has no cfx_uploader.json', async () => {
+test('never downloads the release ZIP asset', async () => {
   const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cfx-release-zip-'));
   const manifest = 'fx_version "cerulean"\ngame "rdr3"\nversion "1.0.0"\n';
   try {
     await withMockedFetch((request) => {
       if (request.url.endsWith('/releases/tags/v2.17.0')) return json(RELEASE);
-      if (request.url === RELEASE.assets[0].browser_download_url) {
-        return new Response(zipBuffer({ 'jo_libs/fxmanifest.lua': manifest }));
-      }
       if (request.url === RELEASE.zipball_url) {
         return new Response(zipBuffer({
           'Jump-On-Studios-RedM-jo_libs-abc123/cfx_uploader.json': JSON.stringify({ portalName: 'RedM - jo_libs', foldersToZip: ['jo_libs'] }),
@@ -77,7 +74,6 @@ test('uses the source zipball when the release ZIP asset has no cfx_uploader.jso
       );
       assert.deepEqual(requests.map((request) => request.url), [
         'https://api.github.com/repos/Jump-On-Studios/RedM-jo_libs/releases/tags/v2.17.0',
-        RELEASE.assets[0].browser_download_url,
         RELEASE.zipball_url,
       ]);
     });

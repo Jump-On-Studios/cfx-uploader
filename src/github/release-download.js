@@ -40,55 +40,32 @@ function buildGithubHeaders(githubToken, accept = 'application/vnd.github+json')
 }
 
 /**
- * Extract preferred downloadable ZIP info from a GitHub release payload.
- * It prefers ZIP assets and falls back to GitHub zipball when needed.
+ * Extract download info for the source ZIP (zipball) of a GitHub release.
+ * ZIP assets attached to the release are ignored: they rarely contain cfx_uploader.json and their browser_download_url returns 404 on private repositories.
  * @param {Record<string, any>} release
- * @returns {{ url: string, fileName: string, version: string | null, source: 'asset' | 'zipball', body: string | null, prerelease: boolean } | null}
+ * @returns {{ url: string, fileName: string, version: string | null, source: 'zipball', body: string | null, prerelease: boolean, releaseId: number | null } | null}
  */
 function getDownloadInfoFromRelease(release) {
-  const releaseFields = {
-    version: release.tag_name || null,
+  if (!release.zipball_url) {
+    return null;
+  }
+
+  const version = release.tag_name || null;
+  return {
+    version,
     body: release.body || null,
     prerelease: Boolean(release.prerelease),
     releaseId: release.id || null,
-    zipballUrl: release.zipball_url || null,
+    url: release.zipball_url,
+    fileName: `${version || 'latest'}.zip`,
+    source: 'zipball',
   };
-  const zipAsset = findZipAsset(release);
-
-  if (zipAsset) {
-    return {
-      ...releaseFields,
-      url: zipAsset.browser_download_url,
-      fileName: zipAsset.name,
-      source: 'asset',
-    };
-  }
-
-  return getZipballDownloadInfo(releaseFields);
 }
 
 function findZipAsset(release) {
   return (Array.isArray(release.assets) ? release.assets : []).find(
     (asset) => asset.name.endsWith('.zip') || asset.content_type === 'application/zip'
   ) || null;
-}
-
-/**
- * Switch release download info to the GitHub source zipball of the same release.
- * @param {Record<string, any>} releaseInfo
- * @returns {Record<string, any> | null}
- */
-function getZipballDownloadInfo(releaseInfo) {
-  if (!releaseInfo.zipballUrl) {
-    return null;
-  }
-
-  return {
-    ...releaseInfo,
-    url: releaseInfo.zipballUrl,
-    fileName: `${releaseInfo.version || 'latest'}.zip`,
-    source: 'zipball',
-  };
 }
 
 /**
@@ -173,7 +150,7 @@ function assertReleaseVersionMatchesManifest(releaseVersion, manifestVersion) {
 /**
  * Resolve latest release download information from GitHub.
  * @param {{ repository: string, githubToken?: string }} options
- * @returns {Promise<{ url: string, fileName: string, version: string | null, source: 'asset' | 'zipball', body: string | null, prerelease: boolean } | null>}
+ * @returns {Promise<{ url: string, fileName: string, version: string | null, source: 'zipball', body: string | null, prerelease: boolean } | null>}
  */
 async function getLatestReleaseDownloadInfo(options) {
   const { repository, githubToken } = options;
@@ -196,7 +173,7 @@ async function getLatestReleaseDownloadInfo(options) {
 /**
  * Resolve release download information for a specific GitHub tag.
  * @param {{ repository: string, releaseTag: string, githubToken?: string }} options
- * @returns {Promise<{ url: string, fileName: string, version: string | null, source: 'asset' | 'zipball', body: string | null, prerelease: boolean } | null>}
+ * @returns {Promise<{ url: string, fileName: string, version: string | null, source: 'zipball', body: string | null, prerelease: boolean } | null>}
  */
 async function getReleaseDownloadInfoByTag(options) {
   const { repository, releaseTag, githubToken } = options;
@@ -330,7 +307,6 @@ async function downloadReleaseZip(options) {
 
 module.exports = {
   getDownloadInfoFromRelease,
-  getZipballDownloadInfo,
   attachZipToRelease,
   getAlternateReleaseTag,
   normalizeVersionForCompare,

@@ -354,7 +354,7 @@ Fields:
 
 Library mode is strict: if `cfx_uploader.json` is missing from the downloaded release, upload fails with `Missing cfx_uploader.json at repository root...`. The `mock-config.js` fallback is only for local CLI development.
 
-When the release has a ZIP asset (for example a build ZIP that only contains the resource folder) and that ZIP has no `cfx_uploader.json`, CFX Uploader downloads the GitHub source ZIP of the same release instead and reads the config from the repository root.
+CFX Uploader always downloads the GitHub source ZIP (zipball) of the release and reads the config from the repository root. ZIP assets attached to the release are never downloaded: they rarely contain `cfx_uploader.json`, and their download URL returns `404` on private repositories.
 
 ## Library Usage
 
@@ -515,7 +515,7 @@ export async function handleGithubReleaseWebhook(payload) {
 | `deleteOldestVersionWhenCapped` | no | Overrides the project JSON capped-version behavior. |
 | `maxPrereleaseVersionsToKeep` | no | Overrides the project JSON prerelease retention policy. Use `null` to delete the oldest version regardless of type. Values above `4` are capped to `4`. |
 | `changelog` | no | CFX release notes. Defaults to the GitHub release body. |
-| `attachZipToReleaseWhenMissing` | no | When `true` and the GitHub release has no ZIP asset, attach the filtered ZIP (`<first foldersToZip>.zip`) to the release before authenticating with CFX. Needs a `githubToken` with write access to the repository contents. A failure does not stop the CFX upload and is reported in `releaseAsset`. Defaults to `false`. |
+| `attachZipToReleaseWhenMissing` | no | When `true`, attach the filtered ZIP (`<first foldersToZip>.zip`) to the release before authenticating with CFX, unless the release already has a ZIP asset. Needs a `githubToken` with write access to the repository contents. A failure does not stop the CFX upload and is reported in `releaseAsset`. Defaults to `false`. |
 | `onLog` | no | Custom logger callback. Defaults to `console.log`. |
 | `onProgress` | no | Structured progress callback for external UIs, webhooks, or Discord workflow cards. |
 
@@ -561,7 +561,7 @@ The library returns a structured result on success:
 }
 ```
 
-`releaseAsset.status` is `skipped` (option disabled or the release already had a ZIP), `uploaded`, `exists` (a ZIP appeared on the release in the meantime) or `failed` (with `error`).
+`releaseAsset.status` is `skipped` (option disabled), `uploaded`, `exists` (the release already has a ZIP asset) or `failed` (with `error`).
 
 `authMethod` is `password`, `passkey`, or `cached`. Because uploads retain the configured authentication source when available, use `sessionReused`—not `authMethod` alone—to determine whether Puppeteer was skipped in favor of the encrypted cache.
 
@@ -899,7 +899,7 @@ Common errors:
 | Session cache | `Unable to decrypt CFX session cache...` | The cache key is wrong or the encrypted file is corrupted. |
 | GitHub release | `No downloadable release found for ...` | The release/tag could not be found or has no downloadable archive. |
 | GitHub release | `GitHub API error...` / `Download failed...` | GitHub rejected the release lookup or ZIP download. |
-| Project config | `Missing cfx_uploader.json at repository root...` | Neither the release ZIP asset nor the source ZIP contains the required config file. The error has `code: "CFX_UPLOADER_CONFIG_MISSING"`. |
+| Project config | `Missing cfx_uploader.json at repository root...` | The source ZIP of the release does not contain the required config file. The error has `code: "CFX_UPLOADER_CONFIG_MISSING"`. |
 | Project config | `Invalid cfx_uploader.json: portalName...` | `portalName` is missing or invalid. |
 | Project config | `Invalid cfx_uploader.json: foldersToZip...` | `foldersToZip` is missing or invalid. |
 | Project config | `Invalid cfx_uploader.json: deleteOldestVersionWhenCapped...` | The capped-version option is not a boolean. |
