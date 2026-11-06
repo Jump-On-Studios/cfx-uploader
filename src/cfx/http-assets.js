@@ -1,6 +1,11 @@
 const { cfxJson } = require('./http-session');
 
 const ASSETS_LIST_PATH = '/v1/me/assets?page=1&search=&sort=asset.id&direction=desc';
+const MAX_ASSET_PAGES = 50;
+
+function assetsListPath({ page = 1, search = '' } = {}) {
+  return `/v1/me/assets?page=${page}&search=${encodeURIComponent(search)}&sort=asset.id&direction=desc`;
+}
 
 function withCacheBuster(path) {
   const separator = path.includes('?') ? '&' : '?';
@@ -27,14 +32,30 @@ function extractAssetsList(payload) {
   throw new Error(`Unexpected CFX assets list shape: ${JSON.stringify(Object.keys(payload || {}))}`);
 }
 
-async function listAssets(session) {
-  const payload = await cfxJson(session, withCacheBuster(ASSETS_LIST_PATH));
+async function listAssets(session, options = {}) {
+  const payload = await cfxJson(session, withCacheBuster(assetsListPath(options)));
   return extractAssetsList(payload);
 }
 
+function findExact(assets, assetName) {
+  return assets.find((candidate) => candidate && candidate.name === assetName);
+}
+
 async function findAssetByExactName(session, assetName) {
-  const assets = await listAssets(session);
-  const asset = assets.find((candidate) => candidate && candidate.name === assetName);
+  // The assets list is paginated: page 1 alone misses older assets.
+  // Try the portal search first, then walk every page as a fallback.
+  let asset = findExact(await listAssets(session, { search: assetName }), assetName);
+
+  const seenIds = new Set();
+  const assets = [];
+  for (let page = 1; !asset && page <= MAX_ASSET_PAGES; page += 1) {
+    const pageAssets = await listAssets(session, { page });
+    const fresh = pageAssets.filter((candidate) => candidate && !seenIds.has(candidate.id));
+    if (fresh.length === 0) break;
+    fresh.forEach((candidate) => seenIds.add(candidate.id));
+    assets.push(...fresh);
+    asset = findExact(fresh, assetName);
+  }
 
   if (!asset) {
     const availableNames = assets
@@ -59,6 +80,7 @@ async function getAssetDetails(session, assetId, options = {}) {
 
 module.exports = {
   ASSETS_LIST_PATH,
+  assetsListPath,
   listAssets,
   findAssetByExactName,
   getAssetDetails,
